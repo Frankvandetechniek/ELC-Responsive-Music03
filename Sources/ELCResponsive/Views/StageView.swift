@@ -234,6 +234,15 @@ struct VibePanel: View {
                     }
                     Meter(label: "Arousal", value: vibe.arousal, color: .orange)
                     Meter(label: "Valence", value: vibe.valence, color: .yellow)
+                    if !vibe.topTags.isEmpty {
+                        HStack(alignment: .top, spacing: 4) {
+                            Image(systemName: "brain").font(.caption).foregroundStyle(Theme.magenta)
+                                .help("Genre/mood tags from the MusiCNN neural network")
+                            Text(vibe.topTags.joined(separator: " · "))
+                                .font(.caption)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                     if !vibe.descriptors.isEmpty {
                         Text(vibe.descriptors.joined(separator: " · "))
                             .font(.caption)

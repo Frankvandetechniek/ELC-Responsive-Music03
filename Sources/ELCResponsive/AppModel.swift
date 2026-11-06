@@ -280,7 +280,10 @@ final class AppModel: ObservableObject {
                 }
                 // Instrument / vocal recognition with Apple's on-device sound classifier.
                 let evidence = FileSoundClassifier.evidence(url: url)
-                let result = evidence.isEmpty ? base : base.withEvidence(evidence)
+                Task { @MainActor in self.analyzing[trackID] = 0.92 }
+                // Genre / mood tags from the MusiCNN neural network.
+                let tags = GenreModel.tags(url: url)
+                let result = (evidence.isEmpty && tags.isEmpty) ? base : base.withEvidence(evidence, tags: tags)
                 AnalysisCache.save(result, for: url)
                 await MainActor.run {
                     self.analyzing[trackID] = nil

@@ -25,6 +25,10 @@ public struct Vibe: Codable, Equatable, Sendable {
     public var descriptors: [String] = []
     public var scores: [String: Double] = [:]
     public var isReady: Bool = false
+    /// Strongest MusiCNN tags with probabilities (for display).
+    public var topTags: [String] = []
+    /// True when the neural genre/mood model contributed.
+    public var usesNeuralModel: Bool = false
 
     public init() {}
 
@@ -88,8 +92,34 @@ public struct VibeFeatures: Codable, Equatable, Sendable {
     public var tonalClarity: Double = 0     // 0...1
     public var key: String = ""
     public var evidence: [String: Double] = [:]   // SoundEvidence rawValue → 0...1
+    /// MusiCNN (MSD) tag probabilities, e.g. "pop" → 0.62 (empty when not available).
+    public var tags: [String: Double] = [:]
 
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+        case bpm, pulseClarity, onsetRate, fourOnFloor, backbeat, syncopation, brightness, bassShare, dynamics,
+             percussiveness, majorness, tonalClarity, key, evidence, tags
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        bpm = try c.decodeIfPresent(Double.self, forKey: .bpm) ?? 120
+        pulseClarity = try c.decodeIfPresent(Double.self, forKey: .pulseClarity) ?? 0
+        onsetRate = try c.decodeIfPresent(Double.self, forKey: .onsetRate) ?? 0
+        fourOnFloor = try c.decodeIfPresent(Double.self, forKey: .fourOnFloor) ?? 0
+        backbeat = try c.decodeIfPresent(Double.self, forKey: .backbeat) ?? 0
+        syncopation = try c.decodeIfPresent(Double.self, forKey: .syncopation) ?? 0
+        brightness = try c.decodeIfPresent(Double.self, forKey: .brightness) ?? 0
+        bassShare = try c.decodeIfPresent(Double.self, forKey: .bassShare) ?? 0
+        dynamics = try c.decodeIfPresent(Double.self, forKey: .dynamics) ?? 0
+        percussiveness = try c.decodeIfPresent(Double.self, forKey: .percussiveness) ?? 0
+        majorness = try c.decodeIfPresent(Double.self, forKey: .majorness) ?? 0
+        tonalClarity = try c.decodeIfPresent(Double.self, forKey: .tonalClarity) ?? 0
+        key = try c.decodeIfPresent(String.self, forKey: .key) ?? ""
+        evidence = try c.decodeIfPresent([String: Double].self, forKey: .evidence) ?? [:]
+        tags = try c.decodeIfPresent([String: Double].self, forKey: .tags) ?? [:]
+    }
 
     func ev(_ e: SoundEvidence) -> Double { evidence[e.rawValue] ?? 0 }
 }
@@ -230,6 +260,7 @@ enum KeyFinder {
 /// evidence from Apple's on-device neural sound classifier.
 public enum VibeModel {
     static func sigmoid(_ x: Double) -> Double { 1 / (1 + exp(-x)) }
+    static func logit(_ p: Double) -> Double { let q = clamp(p, 1e-4, 1 - 1e-4); return log(q / (1 - q)) }
     static func bump(_ x: Double, _ c: Double, _ w: Double) -> Double { exp(-0.5 * pow((x - c) / w, 2)) }
     /// Tempo fit allowing for half/double tempo detections.
     static func tempoFit(_ bpm: Double, _ c: Double, _ w: Double) -> Double {
@@ -277,6 +308,41 @@ public enum VibeModel {
             + 0.5 * ev(.synth) - 1.0 * f.fourOnFloor - 1.2 * ev(.drums) - 0.6 * ev(.vocals)
         s[.latin] = 1.8 * f.syncopation + 1.0 * tempoFit(f.bpm, 98, 10) + 1.8 * ev(.latinPercussion) + 0.6 * ev(.brass)
             + 0.4 * max(0, f.majorness) - 0.3 * ev(.electricGuitar)
+
+        // Neural genre / mood tags (MusiCNN, trained on the Million Song Dataset) dominate when available;
+        // the rhythm rules above then only break ties (e.g. house vs EDM, DnB tempo, Latin percussion).
+        if !f.tags.isEmpty {
+            v.usesNeuralModel = true
+            let g = { (k: String) in f.tags[k] ?? 0 }
+            var ml: [MusicStyle: Double] = [:]
+            ml[.pop] = g("pop") + 0.6 * g("indie pop") + 0.4 * g("catchy") + 0.25 * g("female vocalists") + 0.2 * g("00s")
+            ml[.rock] = g("rock") + g("alternative rock") + g("classic rock") + g("indie rock") + g("hard rock")
+                + g("metal") + g("heavy metal") + g("punk") + g("Progressive rock") + 0.4 * g("guitar") + 0.3 * g("alternative")
+            ml[.hipHop] = 1.2 * g("Hip-Hop") + g("rnb") + 0.4 * g("soul") + 0.3 * g("funk") + 0.3 * g("sexy")
+            ml[.house] = 1.3 * g("House") + 0.4 * g("electronic") + 0.3 * g("electro") + 0.3 * g("dance")
+            ml[.edm] = g("dance") + 0.8 * g("electro") + 0.4 * g("electronic") + 0.5 * g("party") + 0.2 * g("electronica")
+            ml[.ambient] = g("ambient") + 0.7 * g("chillout") + 0.6 * g("chill") + 0.4 * g("instrumental")
+                + 0.3 * g("electronica") + 0.3 * g("experimental")
+            ml[.ballad] = g("acoustic") + 0.8 * g("folk") + 0.7 * g("Mellow") + 0.5 * g("beautiful") + 0.5 * g("sad")
+                + 0.5 * g("easy listening") + 0.5 * g("country") + 0.4 * g("jazz") + 0.3 * g("blues")
+            ml[.drumAndBass] = 0.4 * g("electronic") * dnbTempo
+            ml[.latin] = 0.3 * g("dance") * (f.syncopation + ev(.latinPercussion))
+            let mlMax = max(ml.values.max() ?? 0, 1e-6)
+            for style in MusicStyle.allCases {
+                // relative (which style the tags favour) + absolute (how sure the model is)
+                let rel = (ml[style] ?? 0) / mlMax
+                s[style] = 0.35 * (s[style] ?? 0) + 4.0 * rel + 2.0 * (ml[style] ?? 0)
+            }
+            // Mood from tags
+            let happy = g("happy") + 0.5 * g("catchy") + 0.5 * g("party") + 0.3 * g("dance")
+            let sad = g("sad") + 0.4 * g("Mellow") + 0.2 * g("beautiful")
+            v.valence = sigmoid(logit(v.valence) * 0.5 + 3.0 * (happy - sad))
+            let energetic = g("party") + g("dance") + g("metal") + g("hard rock") + g("punk") + g("heavy metal") + 0.5 * g("electro")
+            let calm = g("Mellow") + g("chill") + g("chillout") + g("ambient") + 0.6 * g("acoustic") + g("easy listening") + 0.4 * g("sad")
+            v.arousal = sigmoid(logit(v.arousal) * 0.5 + 2.5 * (energetic - calm))
+            v.topTags = f.tags.sorted { $0.value > $1.value }.prefix(5)
+                .filter { $0.value > 0.08 }.map { "\($0.key) \(Int(($0.value * 100).rounded()))%" }
+        }
 
         // Softmax
         let temp = 0.55

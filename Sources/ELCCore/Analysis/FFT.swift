@@ -31,6 +31,43 @@ public final class FFTMagnitude {
         bitReverse = br
     }
 
+    /// Unnormalised power spectrum |X|² with a periodic Hann window: `size/2 + 1` bins (DC ... Nyquist).
+    public func power(_ frame: UnsafeBufferPointer<Float>) -> [Float] {
+        transform(frame)
+        var out = [Float](repeating: 0, count: size / 2 + 1)
+        for i in 0...(size / 2) { out[i] = Float(re[i] * re[i] + im[i] * im[i]) }
+        return out
+    }
+
+    private func transform(_ frame: UnsafeBufferPointer<Float>) {
+        let n = size
+        for i in 0..<n {
+            let v = i < frame.count ? Double(frame[i]) : 0
+            re[bitReverse[i]] = v * window[i]
+            im[bitReverse[i]] = 0
+        }
+        var len = 2
+        while len <= n {
+            let half = len / 2
+            let step = n / len
+            var start = 0
+            while start < n {
+                var k = 0
+                for j in 0..<half {
+                    let wr = cosTable[k], wi = sinTable[k]
+                    let a = start + j, b = a + half
+                    let tr = re[b] * wr - im[b] * wi
+                    let ti = re[b] * wi + im[b] * wr
+                    re[b] = re[a] - tr; im[b] = im[a] - ti
+                    re[a] += tr; im[a] += ti
+                    k += step
+                }
+                start += len
+            }
+            len <<= 1
+        }
+    }
+
     /// Returns `size/2` magnitudes for a frame of `size` samples (Hann windowed).
     public func magnitudes(_ frame: [Float]) -> [Double] {
         let n = size

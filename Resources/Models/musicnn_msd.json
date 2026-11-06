@@ -1,0 +1,595 @@
+{
+ "tensors": [
+  {
+   "name": "batch_normalization/beta",
+   "shape": [
+    1
+   ],
+   "offset": 0,
+   "count": 1
+  },
+  {
+   "name": "batch_normalization/gamma",
+   "shape": [
+    1
+   ],
+   "offset": 1,
+   "count": 1
+  },
+  {
+   "name": "batch_normalization/moving_mean",
+   "shape": [
+    1
+   ],
+   "offset": 2,
+   "count": 1
+  },
+  {
+   "name": "batch_normalization/moving_variance",
+   "shape": [
+    1
+   ],
+   "offset": 3,
+   "count": 1
+  },
+  {
+   "name": "batch_normalization_1/beta",
+   "shape": [
+    204
+   ],
+   "offset": 4,
+   "count": 204
+  },
+  {
+   "name": "batch_normalization_1/gamma",
+   "shape": [
+    204
+   ],
+   "offset": 208,
+   "count": 204
+  },
+  {
+   "name": "batch_normalization_1/moving_mean",
+   "shape": [
+    204
+   ],
+   "offset": 412,
+   "count": 204
+  },
+  {
+   "name": "batch_normalization_1/moving_variance",
+   "shape": [
+    204
+   ],
+   "offset": 616,
+   "count": 204
+  },
+  {
+   "name": "batch_normalization_10/beta",
+   "shape": [
+    200
+   ],
+   "offset": 820,
+   "count": 200
+  },
+  {
+   "name": "batch_normalization_10/gamma",
+   "shape": [
+    200
+   ],
+   "offset": 1020,
+   "count": 200
+  },
+  {
+   "name": "batch_normalization_10/moving_mean",
+   "shape": [
+    200
+   ],
+   "offset": 1220,
+   "count": 200
+  },
+  {
+   "name": "batch_normalization_10/moving_variance",
+   "shape": [
+    200
+   ],
+   "offset": 1420,
+   "count": 200
+  },
+  {
+   "name": "batch_normalization_2/beta",
+   "shape": [
+    204
+   ],
+   "offset": 1620,
+   "count": 204
+  },
+  {
+   "name": "batch_normalization_2/gamma",
+   "shape": [
+    204
+   ],
+   "offset": 1824,
+   "count": 204
+  },
+  {
+   "name": "batch_normalization_2/moving_mean",
+   "shape": [
+    204
+   ],
+   "offset": 2028,
+   "count": 204
+  },
+  {
+   "name": "batch_normalization_2/moving_variance",
+   "shape": [
+    204
+   ],
+   "offset": 2232,
+   "count": 204
+  },
+  {
+   "name": "batch_normalization_3/beta",
+   "shape": [
+    51
+   ],
+   "offset": 2436,
+   "count": 51
+  },
+  {
+   "name": "batch_normalization_3/gamma",
+   "shape": [
+    51
+   ],
+   "offset": 2487,
+   "count": 51
+  },
+  {
+   "name": "batch_normalization_3/moving_mean",
+   "shape": [
+    51
+   ],
+   "offset": 2538,
+   "count": 51
+  },
+  {
+   "name": "batch_normalization_3/moving_variance",
+   "shape": [
+    51
+   ],
+   "offset": 2589,
+   "count": 51
+  },
+  {
+   "name": "batch_normalization_4/beta",
+   "shape": [
+    51
+   ],
+   "offset": 2640,
+   "count": 51
+  },
+  {
+   "name": "batch_normalization_4/gamma",
+   "shape": [
+    51
+   ],
+   "offset": 2691,
+   "count": 51
+  },
+  {
+   "name": "batch_normalization_4/moving_mean",
+   "shape": [
+    51
+   ],
+   "offset": 2742,
+   "count": 51
+  },
+  {
+   "name": "batch_normalization_4/moving_variance",
+   "shape": [
+    51
+   ],
+   "offset": 2793,
+   "count": 51
+  },
+  {
+   "name": "batch_normalization_5/beta",
+   "shape": [
+    51
+   ],
+   "offset": 2844,
+   "count": 51
+  },
+  {
+   "name": "batch_normalization_5/gamma",
+   "shape": [
+    51
+   ],
+   "offset": 2895,
+   "count": 51
+  },
+  {
+   "name": "batch_normalization_5/moving_mean",
+   "shape": [
+    51
+   ],
+   "offset": 2946,
+   "count": 51
+  },
+  {
+   "name": "batch_normalization_5/moving_variance",
+   "shape": [
+    51
+   ],
+   "offset": 2997,
+   "count": 51
+  },
+  {
+   "name": "batch_normalization_6/beta",
+   "shape": [
+    64
+   ],
+   "offset": 3048,
+   "count": 64
+  },
+  {
+   "name": "batch_normalization_6/gamma",
+   "shape": [
+    64
+   ],
+   "offset": 3112,
+   "count": 64
+  },
+  {
+   "name": "batch_normalization_6/moving_mean",
+   "shape": [
+    64
+   ],
+   "offset": 3176,
+   "count": 64
+  },
+  {
+   "name": "batch_normalization_6/moving_variance",
+   "shape": [
+    64
+   ],
+   "offset": 3240,
+   "count": 64
+  },
+  {
+   "name": "batch_normalization_7/beta",
+   "shape": [
+    64
+   ],
+   "offset": 3304,
+   "count": 64
+  },
+  {
+   "name": "batch_normalization_7/gamma",
+   "shape": [
+    64
+   ],
+   "offset": 3368,
+   "count": 64
+  },
+  {
+   "name": "batch_normalization_7/moving_mean",
+   "shape": [
+    64
+   ],
+   "offset": 3432,
+   "count": 64
+  },
+  {
+   "name": "batch_normalization_7/moving_variance",
+   "shape": [
+    64
+   ],
+   "offset": 3496,
+   "count": 64
+  },
+  {
+   "name": "batch_normalization_8/beta",
+   "shape": [
+    64
+   ],
+   "offset": 3560,
+   "count": 64
+  },
+  {
+   "name": "batch_normalization_8/gamma",
+   "shape": [
+    64
+   ],
+   "offset": 3624,
+   "count": 64
+  },
+  {
+   "name": "batch_normalization_8/moving_mean",
+   "shape": [
+    64
+   ],
+   "offset": 3688,
+   "count": 64
+  },
+  {
+   "name": "batch_normalization_8/moving_variance",
+   "shape": [
+    64
+   ],
+   "offset": 3752,
+   "count": 64
+  },
+  {
+   "name": "batch_normalization_9/beta",
+   "shape": [
+    1506
+   ],
+   "offset": 3816,
+   "count": 1506
+  },
+  {
+   "name": "batch_normalization_9/gamma",
+   "shape": [
+    1506
+   ],
+   "offset": 5322,
+   "count": 1506
+  },
+  {
+   "name": "batch_normalization_9/moving_mean",
+   "shape": [
+    1506
+   ],
+   "offset": 6828,
+   "count": 1506
+  },
+  {
+   "name": "batch_normalization_9/moving_variance",
+   "shape": [
+    1506
+   ],
+   "offset": 8334,
+   "count": 1506
+  },
+  {
+   "name": "conv2d/bias",
+   "shape": [
+    204
+   ],
+   "offset": 9840,
+   "count": 204
+  },
+  {
+   "name": "conv2d/kernel",
+   "shape": [
+    7,
+    38,
+    1,
+    204
+   ],
+   "offset": 10044,
+   "count": 54264
+  },
+  {
+   "name": "conv2d_1/bias",
+   "shape": [
+    204
+   ],
+   "offset": 64308,
+   "count": 204
+  },
+  {
+   "name": "conv2d_1/kernel",
+   "shape": [
+    7,
+    67,
+    1,
+    204
+   ],
+   "offset": 64512,
+   "count": 95676
+  },
+  {
+   "name": "conv2d_2/bias",
+   "shape": [
+    51
+   ],
+   "offset": 160188,
+   "count": 51
+  },
+  {
+   "name": "conv2d_2/kernel",
+   "shape": [
+    128,
+    1,
+    1,
+    51
+   ],
+   "offset": 160239,
+   "count": 6528
+  },
+  {
+   "name": "conv2d_3/bias",
+   "shape": [
+    51
+   ],
+   "offset": 166767,
+   "count": 51
+  },
+  {
+   "name": "conv2d_3/kernel",
+   "shape": [
+    64,
+    1,
+    1,
+    51
+   ],
+   "offset": 166818,
+   "count": 3264
+  },
+  {
+   "name": "conv2d_4/bias",
+   "shape": [
+    51
+   ],
+   "offset": 170082,
+   "count": 51
+  },
+  {
+   "name": "conv2d_4/kernel",
+   "shape": [
+    32,
+    1,
+    1,
+    51
+   ],
+   "offset": 170133,
+   "count": 1632
+  },
+  {
+   "name": "conv2d_5/bias",
+   "shape": [
+    64
+   ],
+   "offset": 171765,
+   "count": 64
+  },
+  {
+   "name": "conv2d_5/kernel",
+   "shape": [
+    7,
+    561,
+    1,
+    64
+   ],
+   "offset": 171829,
+   "count": 251328
+  },
+  {
+   "name": "conv2d_6/bias",
+   "shape": [
+    64
+   ],
+   "offset": 423157,
+   "count": 64
+  },
+  {
+   "name": "conv2d_6/kernel",
+   "shape": [
+    7,
+    64,
+    1,
+    64
+   ],
+   "offset": 423221,
+   "count": 28672
+  },
+  {
+   "name": "conv2d_7/bias",
+   "shape": [
+    64
+   ],
+   "offset": 451893,
+   "count": 64
+  },
+  {
+   "name": "conv2d_7/kernel",
+   "shape": [
+    7,
+    64,
+    1,
+    64
+   ],
+   "offset": 451957,
+   "count": 28672
+  },
+  {
+   "name": "dense/bias",
+   "shape": [
+    200
+   ],
+   "offset": 480629,
+   "count": 200
+  },
+  {
+   "name": "dense/kernel",
+   "shape": [
+    1506,
+    200
+   ],
+   "offset": 480829,
+   "count": 301200
+  },
+  {
+   "name": "dense_1/bias",
+   "shape": [
+    50
+   ],
+   "offset": 782029,
+   "count": 50
+  },
+  {
+   "name": "dense_1/kernel",
+   "shape": [
+    200,
+    50
+   ],
+   "offset": 782079,
+   "count": 10000
+  }
+ ],
+ "model": "MusiCNN (MSD_musicnn) by Jordi Pons / Music Technology Group, UPF. ISC license.",
+ "labels": [
+  "rock",
+  "pop",
+  "alternative",
+  "indie",
+  "electronic",
+  "female vocalists",
+  "dance",
+  "00s",
+  "alternative rock",
+  "jazz",
+  "beautiful",
+  "metal",
+  "chillout",
+  "male vocalists",
+  "classic rock",
+  "soul",
+  "indie rock",
+  "Mellow",
+  "electronica",
+  "80s",
+  "folk",
+  "90s",
+  "chill",
+  "instrumental",
+  "punk",
+  "oldies",
+  "blues",
+  "hard rock",
+  "ambient",
+  "acoustic",
+  "experimental",
+  "female vocalist",
+  "guitar",
+  "Hip-Hop",
+  "70s",
+  "party",
+  "country",
+  "easy listening",
+  "sexy",
+  "catchy",
+  "funk",
+  "electro",
+  "heavy metal",
+  "Progressive rock",
+  "60s",
+  "rnb",
+  "indie pop",
+  "sad",
+  "House",
+  "happy"
+ ]
+}

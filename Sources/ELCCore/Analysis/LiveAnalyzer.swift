@@ -157,6 +157,7 @@ public final class LiveAnalyzer: @unchecked Sendable {
     private var vibeTimer = 0.0
     private var vibe = Vibe()
     private let evidenceBox = Locked<[SoundEvidence: Double]>([:])
+    private let tagsBox = Locked<[String: Double]>([:])
     private let stateBox = Locked(MusicState())
 
     private let manualBox = Locked<Double?>(nil)
@@ -203,6 +204,9 @@ public final class LiveAnalyzer: @unchecked Sendable {
 
     /// Instrument/vocal evidence from the on-device sound classifier (any thread).
     public func updateSoundEvidence(_ e: [SoundEvidence: Double]) { evidenceBox.set(e) }
+
+    /// Smoothed MusiCNN genre / mood tag probabilities (any thread).
+    public func updateTags(_ t: [String: Double]) { tagsBox.set(t) }
 
     private func applyMarkDownbeat() {
         downbeatOffset = ((Int(beatPos.rounded()) % 4) + 4) % 4
@@ -283,7 +287,8 @@ public final class LiveAnalyzer: @unchecked Sendable {
         if vibeTimer >= 2 {
             vibeTimer = 0
             if vibeAcc.hasData && f.time > 8 {
-                let feats = vibeAcc.features(bpm: bpm, pulseClarity: tempoConfidence, evidence: evidenceBox.get())
+                var feats = vibeAcc.features(bpm: bpm, pulseClarity: tempoConfidence, evidence: evidenceBox.get())
+                feats.tags = tagsBox.get()
                 vibe = VibeModel.infer(feats)
             }
         }

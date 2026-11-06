@@ -10,7 +10,7 @@ public struct TrackSection: Codable, Equatable, Sendable {
 
 /// Result of analysing a complete audio file. Cached next to the setlist.
 public struct TrackAnalysis: Codable, Equatable, Sendable {
-    public static let currentVersion = 3
+    public static let currentVersion = 4
     public var version: Int = TrackAnalysis.currentVersion
     public var duration: Double
     public var bpm: Double
@@ -25,10 +25,12 @@ public struct TrackAnalysis: Codable, Equatable, Sendable {
     public var vibeFeatures = VibeFeatures()
     public var vibe = Vibe()
 
-    /// Re-runs the vibe model with instrument / vocal evidence from the sound classifier.
-    public func withEvidence(_ e: [SoundEvidence: Double]) -> TrackAnalysis {
+    /// Re-runs the vibe model with instrument / vocal evidence from the sound classifier
+    /// and/or MusiCNN genre & mood tags.
+    public func withEvidence(_ e: [SoundEvidence: Double], tags: [String: Double] = [:]) -> TrackAnalysis {
         var a = self
         for (k, x) in e { a.vibeFeatures.evidence[k.rawValue] = x }
+        if !tags.isEmpty { a.vibeFeatures.tags = tags }
         a.vibe = VibeModel.infer(a.vibeFeatures)
         return a
     }

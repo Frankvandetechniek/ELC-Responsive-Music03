@@ -15,6 +15,7 @@ final class LiveInput {
     let level = Locked<Float>(0)
     private var mono: [Float] = []
     private let classifier = LiveSoundClassifier()
+    private let genreTagger = LiveGenreTagger()
 
     var analyzer: LiveAnalyzer? { analyzerBox.get() }
     var isRunning: Bool { engine?.isRunning ?? false }
@@ -42,6 +43,8 @@ final class LiveInput {
         analyzerBox.set(analyzer)
         classifier.onEvidence = { [weak analyzer] ev in analyzer?.updateSoundEvidence(ev) }
         classifier.start(sampleRate: format.sampleRate)
+        genreTagger.onTags = { [weak analyzer] tags in analyzer?.updateTags(tags) }
+        genreTagger.start(sampleRate: format.sampleRate)
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             self?.handle(buffer)
         }
@@ -57,6 +60,7 @@ final class LiveInput {
         }
         engine = nil
         classifier.stop()
+        genreTagger.stop()
         analyzerBox.set(nil)
         level.set(0)
     }
@@ -78,6 +82,7 @@ final class LiveInput {
         level.set(max(peak, level.get() * 0.8))
         analyzerBox.get()?.process(mono, now: ProcessInfo.processInfo.systemUptime)
         classifier.feed(mono)
+        genreTagger.feed(mono)
     }
 
     // MARK: - Device list

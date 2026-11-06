@@ -17,6 +17,9 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/ELCResponsive" "$APP/Contents/MacOS/ELC Responsive"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
+# Neural genre/mood model (MusiCNN, ISC license) + notices
+mkdir -p "$APP/Contents/Resources/Models"
+cp Resources/Models/musicnn_msd.bin Resources/Models/musicnn_msd.json Resources/Models/LICENSE-musicnn.md "$APP/Contents/Resources/Models/"
 
 # App icon (generated from scripts/make_icon.swift if available)
 if [ -f Resources/AppIcon.icns ]; then
