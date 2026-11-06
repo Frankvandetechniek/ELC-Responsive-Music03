@@ -268,11 +268,11 @@ final class AppModel: ObservableObject {
         guard let track = setlist.first(where: { $0.id == trackID }), analyzing[trackID] == nil else { return }
         analyzing[trackID] = 0
         let url = track.url
-        Task.detached(priority: .userInitiated) {
+        Task.detached(priority: .userInitiated) { [self] in
             do {
                 let (samples, sr) = try AudioDecoding.monoSamples(url: url)
                 let result = TrackAnalyzer.analyze(samples: samples, sampleRate: sr) { p in
-                    Task { @MainActor [weak self] in self?.analyzing[trackID] = p }
+                    Task { @MainActor in self.analyzing[trackID] = p }
                 }
                 AnalysisCache.save(result, for: url)
                 await MainActor.run {
