@@ -1,0 +1,40 @@
+name: Build macOS app
+
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: self-hosted
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          sw_vers || true
+          swift --version
+
+      - name: Unit tests (core engine, sACN, analysis)
+        run: swift test
+
+      - name: Build app bundle
+        run: ./scripts/build_app.sh
+
+      - name: Zip app
+        run: |
+          cd build
+          rm -f ELC-Responsive.zip
+          ditto -c -k --keepParent "ELC Responsive.app" ELC-Responsive.zip
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: ELC-Responsive-app
+          path: build/ELC-Responsive.zip
+          retention-days: 30
