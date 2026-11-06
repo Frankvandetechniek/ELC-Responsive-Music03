@@ -40,6 +40,10 @@ public enum HybridMove: String, CaseIterable, Codable, Sendable {
     case vUp, fan, cross, forward, audience, circle, figure8, tiltWave, sweep, ballyhoo
 }
 
+public enum FixtureFocus: String, Codable, Sendable {
+    case both, l7, hybrids
+}
+
 /// One "cue": what the whole rig does until the director changes it.
 public struct Look: Equatable, Sendable {
     public var palette: Palette = .brand
@@ -60,6 +64,12 @@ public struct Look: Equatable, Sendable {
     public var movementSize: Double = 1
     /// Snare steps captured when the cue started (so a chase never jumps mid-cue).
     public var snare: SnareSteps = .backbeat
+    /// Which fixture group carries this look; the other plays a background role ("darkness is free").
+    public var featured: FixtureFocus = .both
+    /// How energetic / dynamic the look is (0 = ballad ... 1 = festival EDM), captured per cue.
+    public var drive: Double = 0.5
+    /// Final chorus / last drop: everything a bit bigger.
+    public var lift: Bool = false
 
     public init() {}
 

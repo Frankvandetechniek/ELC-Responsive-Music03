@@ -122,7 +122,10 @@ struct ShowSettingsView: View {
             Section("Behaviour") {
                 LabeledSlider(label: "Movement size", value: $model.show.movementAmount, range: 0...1.5, format: "%.0f%%", scale: 100)
                 LabeledSlider(label: "Reactivity (energy bias)", value: $model.show.energyBias, range: -0.3...0.3, format: "%+.0f", scale: 100)
-                LabeledSlider(label: "Look length (phrases)", value: $model.show.lookChangeRate, range: 0.5...3, format: "×%.1f", scale: 1)
+                LabeledSlider(label: "Max look length without a section change", value: $model.show.lookChangeRate, range: 0.5...3, format: "×%.1f", scale: 1)
+                Text("Looks change on musical boundaries only: a new section (verse → chorus, build → drop...) or a clear change in energy. Repeated sections get the same look, the last chorus/drop gets the biggest version. The slider only sets the safety net for very long sections (×1 = 64 bars).")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 LabeledSlider(label: "Static look intensity", value: $model.show.staticLevel, range: 0.1...1, format: "%.0f%%", scale: 100)
                 Toggle("Use gobos on the Hybrids", isOn: $model.show.useGobos)
                 Toggle("Short blackout right before a drop (setlist)", isOn: $model.show.preDropGap)

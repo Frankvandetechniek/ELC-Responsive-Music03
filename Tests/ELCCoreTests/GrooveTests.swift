@@ -90,26 +90,27 @@ final class GrooveTests: XCTestCase {
     }
 
     func testPopEngineUsesSnarePatterns() {
-        // With a clear snare groove and the pop style, most cues should follow the snare on the L7s.
-        let e = ShowEngine(rig: Rig.elcDefault(), seed: 21)
-        e.mode = .audio
-        e.settings.styleOverride = .pop
-        var t = 0.0
-        var snareCues = Set<String>()
-        var cues = Set<String>()
+        // With a clear snare groove and the pop style, most shows should follow the snare on the L7s.
+        // (Looks only change on section boundaries now, so sample many independent shows.)
         var learned = [Double](repeating: 0.05, count: 16); learned[4] = 1; learned[12] = 0.95
-        for _ in 0..<(44 * 240) {
-            t += 1.0 / 44
-            var m = MusicState()
-            m.source = .live; m.isSilent = false; m.timestamp = t; m.bpm = 120; m.beatPosition = t * 2
-            m.energy = 0.6; m.section = .groove; m.tempoConfidence = 0.9
-            m.snarePattern = learned; m.snareClarity = 0.9
-            _ = e.tick(music: m, now: t, dt: 1.0 / 44)
-            cues.insert(e.look.summary)
-            if e.look.l7Intensity.isSnare { snareCues.insert(e.look.summary) }
+        var snareLooks = 0
+        let runs = 24
+        for seed in 1...runs {
+            let e = ShowEngine(rig: Rig.elcDefault(), seed: UInt64(seed))
+            e.mode = .audio
+            e.settings.styleOverride = .pop
+            var t = 0.0
+            for _ in 0..<(44 * 6) {
+                t += 1.0 / 44
+                var m = MusicState()
+                m.source = .live; m.isSilent = false; m.timestamp = t; m.bpm = 120; m.beatPosition = t * 2
+                m.energy = 0.6; m.section = .groove; m.tempoConfidence = 0.9
+                m.snarePattern = learned; m.snareClarity = 0.9
+                _ = e.tick(music: m, now: t, dt: 1.0 / 44)
+            }
             XCTAssertEqual(e.look.snare.slots, [4, 12])
+            if e.look.l7Intensity.isSnare { snareLooks += 1 }
         }
-        XCTAssertGreaterThan(cues.count, 3)
-        XCTAssertGreaterThanOrEqual(Double(snareCues.count) / Double(cues.count), 0.3, "\(snareCues.count)/\(cues.count)")
+        XCTAssertGreaterThanOrEqual(Double(snareLooks) / Double(runs), 0.4, "\(snareLooks)/\(runs)")
     }
 }

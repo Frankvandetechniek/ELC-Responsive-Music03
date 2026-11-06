@@ -29,6 +29,8 @@ public struct Vibe: Codable, Equatable, Sendable {
     public var topTags: [String] = []
     /// True when the neural genre/mood model contributed.
     public var usesNeuralModel: Bool = false
+    /// How "electronic / dance" the music is (0...1), from the neural tags.
+    public var electronic: Double = 0
 
     public init() {}
 
@@ -340,6 +342,7 @@ public enum VibeModel {
             let energetic = g("party") + g("dance") + g("metal") + g("hard rock") + g("punk") + g("heavy metal") + 0.5 * g("electro")
             let calm = g("Mellow") + g("chill") + g("chillout") + g("ambient") + 0.6 * g("acoustic") + g("easy listening") + 0.4 * g("sad")
             v.arousal = sigmoid(logit(v.arousal) * 0.5 + 2.5 * (energetic - calm))
+            v.electronic = clamp(max(g("electronic"), g("dance"), g("electro"), g("House"), g("electronica")) * 1.6, 0, 1)
             v.topTags = f.tags.sorted { $0.value > $1.value }.prefix(5)
                 .filter { $0.value > 0.08 }.map { "\($0.key) \(Int(($0.value * 100).rounded()))%" }
         }

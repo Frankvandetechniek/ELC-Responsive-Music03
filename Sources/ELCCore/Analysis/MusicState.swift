@@ -51,6 +51,10 @@ public struct MusicState: Sendable {
     /// Learned snare/clap pattern on a 16th grid (0...1 per slot) and how clear it is (0...1).
     public var snarePattern: [Double] = []
     public var snareClarity: Double = 0
+    /// Setlist only: average energy of the current section (0...1) and whether it is the last
+    /// drop/peak of the song (the moment to give everything).
+    public var sectionEnergy: Double? = nil
+    public var isFinalPeak: Bool = false
 
     public init() {}
 

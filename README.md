@@ -44,10 +44,12 @@ The goal is a show that looks programmed by a lighting designer, not an audio vi
    - **alternate on the snare**.
 
    These patterns follow the learned groove on the beat clock, so they land exactly on the hit with no detection delay. The learned pattern is shown in the Music panel.
-5. **Cue-based director**
-   - Looks change only on phrase boundaries (8 or 16 bars), with beat-timed crossfades. Live section changes must hold for a while before they count.
-   - Hybrid colour-wheel, gobo and prism changes happen in black.
-   - Energy decides *which* cue runs. **Intensity never follows loudness.**
+5. **Programmed like a lighting designer would.** These rules come from pro programming practice: Susan Rose (HARMAN), Matt Hemmele (TFWM), Brad Schiller (HARMAN) and PLSN.
+   - **One look per song section.** Looks change only on musical boundaries: a new section (verse → chorus, build → drop, breakdown) or, on live input, a clear step in energy confirmed over two bar lines. They never change in the middle of a chorus. On very long sections without any boundary, a look develops on a 16-bar line after 64 bars, as a safety net.
+   - **Repeated sections reuse their look.** Verse 2 looks like verse 1 and every chorus or drop gets the same look. The **last chorus/drop** gets the biggest version: bigger movement and accents ("don't peak too early").
+   - **Dynamic contrast.** In low sections one fixture group carries the look and the other stays in the background ("darkness is free"). Choruses and drops use the full rig.
+   - **Hits.** A one-beat hit marks the arrival of a big section, and a full impact marks a drop ("jump to a 10, don't land on it"). Live drops hit on the next beat.
+   - **Drive.** How dynamic a song is lit, from ballad to festival EDM. It comes from the style plus the mood (arousal/valence) and how electronic the music is according to the neural tags. A high drive means faster and bigger movement, deeper beat pulses, stronger accents, tighter beams and punchier fades. EDM drops get beat pulses, colour swaps on the bar, flying beams and strobe stabs.
 6. **Smooth output**
    - A phase-locked beat clock follows the music without jumping or stepping back.
    - Pan/tilt run through a critically damped spring with a speed limit.

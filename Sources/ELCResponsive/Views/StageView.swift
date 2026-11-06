@@ -162,9 +162,11 @@ struct MusicPanel: View {
             Panel(title: "Show") {
                 row("Mode", model.status.modeName)
                 row("Energy level", model.status.levelName)
+                Meter(label: "Drive", value: model.status.drive, color: .orange)
+                    .help("How dynamic the show is lit: from ballad (calm) to festival EDM (big and fast)")
                 row("Palette", model.status.paletteName)
                 HStack(spacing: 8) {
-                    Text("Phrase").font(.callout).foregroundStyle(.secondary)
+                    Text("8 bars").font(.callout).foregroundStyle(.secondary)
                     ProgressView(value: clamp(model.status.phraseProgress, 0, 1))
                         .tint(Theme.green)
                 }

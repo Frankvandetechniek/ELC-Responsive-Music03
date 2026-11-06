@@ -143,17 +143,25 @@ public struct LightingPersonality: Sendable {
         levels: [tweak(calmPool) { $0.l7Intensity = [.wave, .breathe, .steady] },
                  tweak(grooveBase) { $0.l7Intensity = [.wave, .steady, .chase, .barPulse, .snareAlternate]; $0.cycleBeats = [16, 32] },
                  tweak(highBase) { $0.l7Intensity = [.pulse, .chase, .centerOut, .wave]; $0.depth = 0.35; $0.cycleBeats = [16] }],
-        phraseBars: 16, fadeBeats: 4, attack: 0.1, release: 0.4, springHz: 0.7, maxSpeed: 70,
-        movementSize: 0.9, accent: .everyBeat, accentAmount: 0.08, halfTime: false, strobe: .dropsOnly,
+        phraseBars: 16, fadeBeats: 4, attack: 0.08, release: 0.35, springHz: 0.9, maxSpeed: 100,
+        movementSize: 1.0, accent: .everyBeat, accentAmount: 0.12, halfTime: false, strobe: .dropsOnly,
         dropImpact: true, colorFadeBeats: 2)
 
+    /// Festival EDM: big, fast and punchy on drops — beams flying, pulses on every beat, colour swaps on bars.
     public static let edm = LightingPersonality(
         style: .edm,
-        levels: [calmPool, tweak(grooveBase) { $0.l7Intensity += [.snareChase] },
-                 tweak(highBase) { $0.depth = 0.5; $0.l7Intensity += [.snareHit, .snareAlternate] }],
-        phraseBars: 8, fadeBeats: 1, attack: 0.05, release: 0.3, springHz: 1.3, maxSpeed: 140,
-        movementSize: 1.1, accent: .downbeat, accentAmount: 0.15, halfTime: false, strobe: .peaks,
-        dropImpact: true, colorFadeBeats: 0.5)
+        levels: [calmPool,
+                 tweak(grooveBase) { $0.l7Intensity = [.chase, .pulse, .centerOut, .alternate, .snareChase]; $0.chaseRates = [1]
+                     $0.cycleBeats = [8, 16] },
+                 tweak(highBase) { $0.depth = 0.55; $0.cycleBeats = [4, 8]; $0.chaseRates = [1]
+                     $0.l7Intensity = [.pulse, .chase, .bounce, .centerOut, .snareHit, .snareAlternate]
+                     $0.l7Color = [.alternateBar, .split, .halves, .centerOut]
+                     $0.hybridIntensity = [.pulse, .steady, .chase, .snareHit]
+                     $0.hybridMove = [.ballyhoo, .circle, .figure8, .sweep, .cross, .fan]
+                     $0.hybridBeam = [.beam, .prism, .linearPrism, .goboPrism] }],
+        phraseBars: 8, fadeBeats: 1, attack: 0.04, release: 0.25, springHz: 1.6, maxSpeed: 170,
+        movementSize: 1.15, accent: .downbeat, accentAmount: 0.25, halfTime: false, strobe: .peaks,
+        dropImpact: true, colorFadeBeats: 0.25)
 
     public static let drumAndBass = LightingPersonality(
         style: .drumAndBass,

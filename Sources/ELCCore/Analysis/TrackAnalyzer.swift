@@ -368,6 +368,8 @@ public struct TrackMusicSource: Sendable {
         if let idx = analysis.sections.lastIndex(where: { $0.startBeat <= bi }) {
             let sec = analysis.sections[idx]
             s.section = isPlaying ? sec.kind : .silence
+            s.sectionEnergy = sec.energy
+            s.isFinalPeak = sec.kind.isHigh && !analysis.sections[(idx + 1)...].contains { $0.kind.isHigh }
             if sec.snareClarity > 0.35 && sec.snarePattern.count == GrooveTracker.slots {
                 s.snarePattern = sec.snarePattern; s.snareClarity = sec.snareClarity
             } else {

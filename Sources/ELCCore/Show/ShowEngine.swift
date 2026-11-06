@@ -80,6 +80,9 @@ public struct EngineStatus: Sendable {
     public var vibe = Vibe()
     public var paused = false
     public var staticOn = false
+    /// How dynamic the show is being lit (0 = ballad ... 1 = festival).
+    public var drive: Double = 0
+    public var finalPeak = false
     public init() {}
 }
 
@@ -163,6 +166,20 @@ public final class ShowEngine: @unchecked Sendable {
     private var lastTrackProgress: Double = 0
     /// Current learned snare steps from the music (captured into each new cue).
     private var currentSnare: SnareSteps = .backbeat
+
+    /// A section "slot" of the song: looks are remembered per slot and reused when it repeats
+    /// (verse 2 looks like verse 1, every chorus has the chorus look) — like a programmed song.
+    struct SectionKey: Hashable { var section: MusicSection; var level: Int }
+    private var lookMemory: [SectionKey: Look] = [:]
+    private var currentKey: SectionKey? = nil
+    private var lastChangeBar = 0
+    private var levelCandidate: Int? = nil
+    private var levelCandidateBars = 0
+    /// How dynamic the current song should be (0 = ballad ... 1 = festival EDM).
+    private var drive = 0.5
+    private var isFinalPeak = false
+    private var entryHitStartBeat: Double? = nil
+    private var sectionEnergy: Double? = nil
 
     struct PostState {
         var pan = 0.0, tilt = 0.0, vPan = 0.0, vTilt = 0.0
@@ -268,6 +285,13 @@ public final class ShowEngine: @unchecked Sendable {
                 directAudio(music: music, beat: beat, dt: dt, palettes: palettes)
             }
             if let fl = fixedLevel { level = fl }
+            let beatIndex = Int(floor(beat))
+            if dropOnNextBeat && beatIndex != lastBeatIndex && lastBeatIndex != Int.min {
+                dropOnNextBeat = false
+                levelCandidate = nil
+                executeDrop(beat: Double(beatIndex), palettes: palettes)
+            }
+            lastBeatIndex = beatIndex
             if bar != lastBar {
                 onBarLine(bar: bar, beat: beat, palettes: palettes)
                 lastBar = bar
@@ -295,6 +319,11 @@ public final class ShowEngine: @unchecked Sendable {
             } else if confirmedSection == .build {
                 buildProgress = clamp((beat - pendingSince) / 32, 0, 1) * 0.7   // live: gentler, never a full ramp
             }
+        }
+        var entryHit: Double? = nil
+        if let start = entryHitStartBeat {
+            let since = beat - start
+            if since >= 0 && since < 1 { entryHit = since } else if since >= 1 { entryHitStartBeat = nil }
         }
         var impact: Double? = nil
         if let start = impactStartBeat {
@@ -339,6 +368,16 @@ public final class ShowEngine: @unchecked Sendable {
                 }
             }
             applyBuildAndImpact(&out, build: buildProgress, impact: impact, beat: beat)
+            if let h = entryHit, impact == nil {
+                // "Jump to a 10, don't land on it": a one-beat hit as the big section arrives.
+                let e = PatternMath.decay(h)
+                for fx in rig.fixtures {
+                    guard var s = out[fx.id] else { continue }
+                    s.intensity = max(s.intensity, e)
+                    if fx.kind == .focusFlexL7 { s.color = s.color.mix(look.palette.accent, e * 0.35) }
+                    out[fx.id] = s
+                }
+            }
             frozenShow = out
         }
 
@@ -364,7 +403,7 @@ public final class ShowEngine: @unchecked Sendable {
         }
 
         // --- Strobe, operator overrides, master
-        let fast = flashHeld || blackout || gap || (impact.map { $0 < 0.25 } ?? false)
+        let fast = flashHeld || blackout || gap || (impact.map { $0 < 0.25 } ?? false) || (entryHit.map { $0 < 0.2 } ?? false)
         for fx in rig.fixtures {
             guard var s = out[fx.id] else { continue }
             s.shutter = (strobeWanted && staticBlend < 0.5 && idleBlend < 0.5) ? .strobe(settings.strobeMaxRate) : .open
@@ -377,8 +416,11 @@ public final class ShowEngine: @unchecked Sendable {
         }
 
         let p = personality
-        let result = postProcess(out, dt: dt, fast: fast, springHz: staticBlend > 0.5 ? 0.6 : p.springHz,
-                                 maxSpeed: staticBlend > 0.5 ? 60 : p.maxSpeed, attack: p.attack, release: p.release)
+        let dyn = look.drive
+        let result = postProcess(out, dt: dt, fast: fast,
+                                 springHz: staticBlend > 0.5 ? 0.6 : p.springHz * (1 + 0.6 * dyn),
+                                 maxSpeed: staticBlend > 0.5 ? 60 : min(180, p.maxSpeed * (1 + 0.5 * dyn)),
+                                 attack: p.attack * (1 - 0.5 * dyn), release: p.release)
 
         // --- Status
         st.levelName = ["Low", "Mid", "High"][clamp(level, 0, 2)]
@@ -388,8 +430,9 @@ public final class ShowEngine: @unchecked Sendable {
         st.bpm = clock.bpm
         st.beatInBar = Int(floor(barBeat))
         st.bar = bar
-        let phraseBars = effectivePhraseBars
-        st.phraseProgress = fmodPositive(Double(bar - phraseOriginBar) + barBeat / 4, Double(phraseBars)) / Double(phraseBars)
+        st.phraseProgress = fmodPositive(Double(bar - phraseOriginBar) + barBeat / 4, 8) / 8
+        st.drive = mode == .audio ? drive : look.drive
+        st.finalPeak = look.lift
         st.energy = mode == .audio ? slowEnergy : music.energy
         st.strobing = strobeWanted
         if mode == .audio {
@@ -400,6 +443,8 @@ public final class ShowEngine: @unchecked Sendable {
         if gap { st.special = "Pre-drop gap" }
         else if impact != nil { st.special = "DROP!" }
         else if let bp = buildProgress { st.special = "Build-up \(Int(bp * 100))%" }
+        else if entryHit != nil { st.special = "Hit!" }
+        else if look.lift && level == 2 { st.special = "Final peak" }
         st.paused = paused
         st.staticOn = staticLook
         if paused { st.special = "Paused" }
@@ -424,10 +469,14 @@ public final class ShowEngine: @unchecked Sendable {
             if lastSource != .track || prog < lastTrackProgress - 0.02 {
                 styleChangePending = true
                 sectionChangePending = true
+                lookMemory = [:]            // new song: new looks
             }
             lastTrackProgress = prog
         }
         lastSource = music.source
+        sectionEnergy = isTrack ? music.sectionEnergy : nil
+        isFinalPeak = isTrack && music.isFinalPeak
+        drive = smoothTowards(drive, computeDrive(music), dt: dt, timeConstant: isTrack ? 0.2 : 4)
 
         slowEnergy = smoothTowards(slowEnergy, clamp(music.energy + settings.energyBias, 0, 1), dt: dt,
                                    timeConstant: isTrack ? 2 : 5)
@@ -443,6 +492,7 @@ public final class ShowEngine: @unchecked Sendable {
                 committedStyle = detected
                 styleChangePending = true
                 styleCandidate = nil
+                lookMemory = [:]            // live: a new style usually means a new song
             }
         } else {
             styleCandidate = nil
@@ -466,7 +516,8 @@ public final class ShowEngine: @unchecked Sendable {
                     let isDrop = music.section == .drop
                     confirmedSection = music.section
                     pendingSection = nil
-                    if isDrop && confirmedSection != .peak { sectionChangePending = true; dropOnNextBar = true }
+                    // Live drop: hit it on the very next beat (not the next bar) so it lands right after the drop.
+                    if isDrop { dropOnNextBeat = true }
                     else { sectionChangePending = true }
                 }
             }
@@ -476,13 +527,16 @@ public final class ShowEngine: @unchecked Sendable {
     }
 
     private var dropOnNextBar = false
+    private var dropOnNextBeat = false
+    private var lastBeatIndex = Int.min
 
     private func targetLevel() -> Int {
         var l = level
         let up: [Double] = [0.42, 0.72]
         let down: [Double] = [0.32, 0.62]
-        while l < 2 && slowEnergy > up[l] { l += 1 }
-        while l > 0 && slowEnergy < down[l - 1] { l -= 1 }
+        let e = sectionEnergy.map { clamp($0 + settings.energyBias, 0, 1) } ?? slowEnergy
+        while l < 2 && e > up[l] { l += 1 }
+        while l > 0 && e < down[l - 1] { l -= 1 }
         switch confirmedSection {
         case .ambient, .breakdown: l = 0
         case .build: l = max(l, 1)
@@ -495,30 +549,60 @@ public final class ShowEngine: @unchecked Sendable {
 
     private func onBarLine(bar: Int, beat: Double, palettes: [Palette]) {
         if mode == .audio {
+            // Looks only change on musical boundaries: a new song/style, a new section
+            // (verse → chorus, build → drop, ...) or — live — a confirmed change in energy level.
             if styleChangePending {
                 styleChangePending = false
                 personality = LightingPersonality.for(committedStyle)
                 level = targetLevel()
                 sectionChangePending = false
-                phraseOriginBar = bar
-                startTransition(full: true, palette: true, fade: personality.fadeBeats, beat: beat, palettes: palettes)
+                changeToSection(bar: bar, beat: beat, palettes: palettes, fade: personality.fadeBeats)
                 return
             }
             if sectionChangePending {
                 sectionChangePending = false
-                let newLevel = targetLevel()
-                level = newLevel
-                phraseOriginBar = bar
+                let oldLevel = level
+                level = targetLevel()
+                levelCandidate = nil
                 if dropOnNextBar {
                     dropOnNextBar = false
                     executeDrop(beat: beat, palettes: palettes)
                 } else if confirmedSection != .build {
-                    let fade = confirmedSection == .breakdown || confirmedSection == .ambient ? max(4, personality.fadeBeats) : personality.fadeBeats
-                    startTransition(full: true, palette: confirmedSection == .breakdown, fade: fade, beat: beat, palettes: palettes)
+                    let soft = confirmedSection == .breakdown || confirmedSection == .ambient
+                    changeToSection(bar: bar, beat: beat, palettes: palettes,
+                                    fade: soft ? max(4, personality.fadeBeats) : personality.fadeBeats)
+                    if level == 2 && oldLevel < 2 && drive >= 0.35 { entryHitStartBeat = beat }
                 }
                 return
             }
+            // Live: the section label can stay the same while the song clearly steps up or down
+            // (verse → chorus). Require the new energy level on two consecutive bar lines.
+            if sectionEnergy == nil && !holdLook {
+                let t = targetLevel()
+                if t != level {
+                    if levelCandidate == t { levelCandidateBars += 1 } else { levelCandidate = t; levelCandidateBars = 1 }
+                    if levelCandidateBars >= 2 && bar - lastChangeBar >= 4 {
+                        let up = t > level
+                        level = t
+                        levelCandidate = nil
+                        changeToSection(bar: bar, beat: beat, palettes: palettes, fade: up ? 1 : max(2, personality.fadeBeats))
+                        if up && level == 2 && drive >= 0.35 { entryHitStartBeat = beat }
+                        return
+                    }
+                } else {
+                    levelCandidate = nil
+                }
+            }
+            // Safety net for very long sections without any detectable boundary: develop the look
+            // (same palette) on a 16-bar line after 64 bars — never in the middle of a phrase.
+            let maxBars = max(32, Int(64 * settings.lookChangeRate))
+            if !holdLook && bar - lastChangeBar >= maxBars && (bar - lastChangeBar) % 16 == 0 {
+                lastChangeBar = bar
+                startTransition(full: false, palette: false, fade: personality.fadeBeats, beat: beat, palettes: palettes)
+            }
+            return
         }
+        // Mood shows (no song structure): change on phrase boundaries.
         let phraseBars = effectivePhraseBars
         let barsIn = bar - phraseOriginBar
         if barsIn > 0 && barsIn % phraseBars == 0 && !holdLook {
@@ -536,11 +620,61 @@ public final class ShowEngine: @unchecked Sendable {
         level = 2
         phrasesSincePalette = 0
         if personality.dropImpact { impactStartBeat = beat }
-        // Snap to the new cue on the drop (no fade).
+        // Snap to the drop look (no fade). Every drop of the song uses the same look; the last one gets the lift.
         cueChanges += 1
         prevLook = nil
-        look = evolve(look, pool: personality.levels[2], palettes: palettes, full: true, palette: true)
+        let key = SectionKey(section: .drop, level: 2)
+        if var remembered = lookMemory[key] {
+            remembered.lift = isFinalPeak
+            look = remembered
+        } else {
+            look = evolve(look, pool: personality.levels[2], palettes: palettes, full: true, palette: true)
+            lookMemory[key] = look
+            look.lift = isFinalPeak
+        }
+        currentKey = key
         phraseOriginBar = currentBar
+        lastChangeBar = currentBar
+    }
+
+    /// Switches to the look of the current section — the remembered one if this section already
+    /// occurred in the song (verse, chorus...), otherwise a new look that is stored for its repeats.
+    private func changeToSection(bar: Int, beat: Double, palettes: [Palette], fade: Double) {
+        let key = SectionKey(section: confirmedSection, level: level)
+        phraseOriginBar = bar
+        lastChangeBar = bar
+        if key == currentKey && prevLook == nil && !lookMemory.isEmpty { return }
+        let next: Look
+        if var remembered = lookMemory[key], palettes.contains(remembered.palette) {
+            remembered.lift = isFinalPeak && level == 2
+            next = remembered
+        } else {
+            var fresh = evolve(look, pool: personality.levels[clamp(level, 0, 2)], palettes: palettes, full: true,
+                               palette: lookMemory.isEmpty || key.level != currentKey?.level || confirmedSection == .breakdown)
+            fresh.lift = false
+            lookMemory[key] = fresh
+            fresh.lift = isFinalPeak && level == 2
+            next = fresh
+        }
+        currentKey = key
+        cueChanges += 1
+        if fade > 0 { prevLook = look; fadeStart = beat; fadeLen = fade } else { prevLook = nil }
+        look = next
+    }
+
+    /// How dynamic the music should be lit: style baseline, adjusted by mood and "electronic-ness".
+    private func computeDrive(_ music: MusicState) -> Double {
+        let base: [MusicStyle: Double] = [.edm: 0.95, .house: 0.8, .drumAndBass: 0.9, .pop: 0.62, .latin: 0.65,
+                                          .hipHop: 0.55, .rock: 0.72, .ballad: 0.1, .ambient: 0.0]
+        var d = base[personality.style] ?? 0.5
+        let v = music.vibe
+        let hasBeat = music.source == .track ? music.tempoConfidence > 0.5 : music.tempoConfidence > 0.3
+        if v.isReady {
+            d += 0.35 * (v.arousal - 0.5) + 0.2 * (v.valence - 0.5)
+            if hasBeat && personality.style != .ballad && personality.style != .ambient { d += 0.25 * v.electronic }
+        }
+        if !hasBeat { d *= 0.5 }
+        return clamp(d, 0, 1)
     }
 
     private var currentBar = 0
@@ -582,8 +716,13 @@ public final class ShowEngine: @unchecked Sendable {
         if aspects.contains(1) || !pool.l7Intensity.contains(n.l7Intensity) || !pool.chaseRates.contains(n.chaseRate) {
             let snareOptions = pool.l7Intensity.filter { $0.isSnare }
             // Songs with a clear snare groove (pop, rock, hip-hop...): usually let the L7s follow the snare.
+            let energetic: Set<IntensityPattern> = [.pulse, .chase, .bounce, .centerOut, .snareHit, .snareChase, .snareAlternate, .alternate]
+            let energeticOptions = pool.l7Intensity.filter { energetic.contains($0) }
             if currentSnare.learned && !snareOptions.isEmpty && rng.unit() < 0.6 {
                 n.l7Intensity = pick(snareOptions, avoiding: l.l7Intensity)
+            } else if drive > 0.65 && level >= 1 && !energeticOptions.isEmpty {
+                // Uplifting / electronic songs with a beat: keep the L7s moving with the rhythm.
+                n.l7Intensity = pick(energeticOptions, avoiding: l.l7Intensity)
             } else {
                 n.l7Intensity = pick(pool.l7Intensity, avoiding: l.l7Intensity)
             }
@@ -609,8 +748,20 @@ public final class ShowEngine: @unchecked Sendable {
         }
         n.l7Zoom = clamp(n.l7Zoom, pool.l7Zoom.lowerBound, pool.l7Zoom.upperBound)
         n.hybridZoom = clamp(n.hybridZoom, pool.hybridZoom.lowerBound, pool.hybridZoom.upperBound)
-        n.movementSize = personality.movementSize
         n.snare = currentSnare
+        // Energy / dynamics of the look follow the song's drive.
+        let d = mode == .audio ? drive : (personality.style == .edm ? 0.9 : 0.5)
+        n.drive = d
+        n.movementSize = personality.movementSize * (0.85 + 0.45 * d)
+        n.depth = clamp(pool.depth + 0.25 * d * (level == 2 ? 1 : 0.4), 0, 0.85)
+        if d > 0.6, let shortest = pool.cycleBeats.min(), level >= 1 { n.moveCycleBeats = shortest }
+        if level == 2 { n.l7Zoom = lerp(n.l7Zoom, pool.l7Zoom.lowerBound, d * 0.6) }
+        // Contrast: in low sections one group carries the look and the other stays in the background.
+        switch level {
+        case 0: n.featured = rng.unit() < 0.5 ? .l7 : .hybrids
+        case 1: n.featured = d > 0.5 ? .both : (rng.unit() < 0.5 ? .l7 : .both)
+        default: n.featured = .both
+        }
         return n
     }
 
@@ -620,9 +771,14 @@ public final class ShowEngine: @unchecked Sendable {
         var out: [Int: FixtureState] = [:]
         let p = personality
         let fxBeat = p.halfTime ? beat / 2 : beat
-        let amount = settings.movementAmount * c.movementSize
-        let accentAmt = p.accentAmount * Double(level) / 2
+        let amount = settings.movementAmount * c.movementSize * (c.lift ? 1.15 : 1)
+        let levelFactor = [0.3, 0.7, 1.0][clamp(level, 0, 2)]
+        let accentAmt = p.accentAmount * levelFactor * (1 + 1.5 * c.drive) * (c.lift ? 1.3 : 1)
         let accent = PatternMath.accent(p.accent, barBeat: barBeat, beat: beat) * accentAmt
+        // Background level of the non-featured group ("darkness is free").
+        let background = level == 0 ? 0.25 + 0.35 * (1 - c.drive) : 0.75
+        let l7Scale = c.featured == .hybrids ? background : 1.0
+        let hybridScale = c.featured == .l7 ? background : 1.0
         let l7s = rig.l7s
         let hybrids = rig.hybrids
 
@@ -635,7 +791,7 @@ public final class ShowEngine: @unchecked Sendable {
             let pat = PatternMath.intensity(c.l7Intensity, beat: fxBeat, barBeat: barBeat, bar: bar, index: i, count: n,
                                             rate: c.chaseRate, cycle: c.moveCycleBeats, x: x, snare: c.snare)
             let depth = c.l7Intensity.isSnare ? max(c.depth, 0.65) : c.depth
-            s.intensity = clamp(c.level * (1 - depth + depth * pat) + (c.l7Intensity.isSnare ? 0 : accent), 0, 1)
+            s.intensity = clamp((c.level * (1 - depth + depth * pat) + (c.l7Intensity.isSnare ? 0 : accent)) * l7Scale, 0, 1)
             let aim = PatternMath.l7Aim(c.l7Move, beat: fxBeat, index: i, x: x, cycle: c.moveCycleBeats, amount: amount)
             s.pan = aim.0; s.tilt = aim.1
             s.zoom = c.l7Zoom
@@ -656,7 +812,7 @@ public final class ShowEngine: @unchecked Sendable {
             let pat = PatternMath.intensity(c.hybridIntensity, beat: fxBeat, barBeat: barBeat, bar: bar, index: chaseIndex,
                                             count: hybrids.count, rate: c.chaseRate * 0.5, cycle: c.moveCycleBeats, x: x, snare: c.snare)
             let hDepth = c.hybridIntensity.isSnare ? max(c.depth, 0.5) : c.depth * 0.8
-            s.intensity = clamp(c.level * (1 - hDepth + hDepth * pat), 0, 1)
+            s.intensity = clamp((c.level * (1 - hDepth + hDepth * pat) + accent * 0.6) * hybridScale, 0, 1)
             let aim = PatternMath.hybridAim(c.hybridMove, beat: fxBeat, number: number, side: side, row: row,
                                             cycle: c.moveCycleBeats, amount: amount)
             s.pan = aim.0; s.tilt = aim.1
