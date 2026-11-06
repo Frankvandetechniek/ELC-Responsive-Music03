@@ -10,21 +10,49 @@ public struct ShowSettings: Codable, Equatable, Sendable {
     public var masterDimmer: Double = 1.0
     public var strobeEnabled: Bool = true
     /// 0...1 maximum strobe speed.
-    public var strobeMaxRate: Double = 0.7
+    public var strobeMaxRate: Double = 0.6
     /// Scales the size of all movements (0 = static, 1 = normal, 1.5 = big).
     public var movementAmount: Double = 1.0
     public var colorPolicy: ColorPolicy = .brandMostly
     /// Shifts the energy the engine reacts to (-0.3 calmer ... +0.3 wilder).
     public var energyBias: Double = 0
-    /// Multiplier on how often looks change (0.5 = twice as often, 2 = half as often).
+    /// Multiplier on phrase length (1 = style default, 2 = looks last twice as long).
     public var lookChangeRate: Double = 1
     public var idleBehaviour: IdleBehaviour = .ambientGlow
     public var idleLevel: Double = 0.15
     /// Short blackout right before an analysed drop (setlist mode only).
     public var preDropGap: Bool = true
     public var useGobos: Bool = true
+    /// Force a lighting style instead of the detected one.
+    public var styleOverride: MusicStyle? = nil
+    /// Intensity of the static look.
+    public var staticLevel: Double = 0.75
 
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+        case masterDimmer, strobeEnabled, strobeMaxRate, movementAmount, colorPolicy, energyBias, lookChangeRate,
+             idleBehaviour, idleLevel, preDropGap, useGobos, styleOverride, staticLevel
+    }
+
+    /// Tolerant decoding so settings saved by older versions still load.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = ShowSettings()
+        masterDimmer = try c.decodeIfPresent(Double.self, forKey: .masterDimmer) ?? d.masterDimmer
+        strobeEnabled = try c.decodeIfPresent(Bool.self, forKey: .strobeEnabled) ?? d.strobeEnabled
+        strobeMaxRate = try c.decodeIfPresent(Double.self, forKey: .strobeMaxRate) ?? d.strobeMaxRate
+        movementAmount = try c.decodeIfPresent(Double.self, forKey: .movementAmount) ?? d.movementAmount
+        colorPolicy = try c.decodeIfPresent(ColorPolicy.self, forKey: .colorPolicy) ?? d.colorPolicy
+        energyBias = try c.decodeIfPresent(Double.self, forKey: .energyBias) ?? d.energyBias
+        lookChangeRate = try c.decodeIfPresent(Double.self, forKey: .lookChangeRate) ?? d.lookChangeRate
+        idleBehaviour = try c.decodeIfPresent(IdleBehaviour.self, forKey: .idleBehaviour) ?? d.idleBehaviour
+        idleLevel = try c.decodeIfPresent(Double.self, forKey: .idleLevel) ?? d.idleLevel
+        preDropGap = try c.decodeIfPresent(Bool.self, forKey: .preDropGap) ?? d.preDropGap
+        useGobos = try c.decodeIfPresent(Bool.self, forKey: .useGobos) ?? d.useGobos
+        styleOverride = try c.decodeIfPresent(MusicStyle.self, forKey: .styleOverride)
+        staticLevel = try c.decodeIfPresent(Double.self, forKey: .staticLevel) ?? d.staticLevel
+    }
 }
 
 public enum EngineMode: Equatable, Sendable {
@@ -36,17 +64,47 @@ public enum EngineMode: Equatable, Sendable {
 /// Live status for the UI.
 public struct EngineStatus: Sendable {
     public var modeName = "Off"
-    public var tierName = "-"
+    public var levelName = "-"
     public var section: MusicSection = .silence
     public var lookSummary = ""
     public var paletteName = ""
     public var bpm: Double = 0
     public var beatInBar: Int = 0
     public var bar: Int = 0
+    public var phraseProgress: Double = 0
     public var energy: Double = 0
     public var strobing = false
     public var special = ""
+    public var styleName = ""
+    public var styleIsManual = false
+    public var vibe = Vibe()
+    public var paused = false
+    public var staticOn = false
     public init() {}
+}
+
+/// Smooth musical clock: follows the analyser's beat but never jumps or runs backwards
+/// (small tempo corrections instead), which removes jitter from every beat-based effect.
+struct BeatClock {
+    var beat = 0.0
+    var bpm = 120.0
+    var initialized = false
+
+    mutating func update(target: Double, targetBPM: Double, dt: Double, follow: Bool) {
+        if !initialized { beat = target; bpm = targetBPM; initialized = true; return }
+        bpm = smoothTowards(bpm, targetBPM, dt: dt, timeConstant: 0.6)
+        let advance = dt * bpm / 60
+        guard follow else { beat += advance; return }
+        let err = target - (beat + advance)
+        if abs(err) > 3 {
+            // Seek / new track / re-lock: jump (the director hides this with a cue change).
+            beat = target
+            return
+        }
+        // Correct the phase by speeding up / slowing down at most 10 %.
+        let maxCorr = 0.1 * advance
+        beat += advance + clamp(err * 2.5 * dt, -maxCorr, maxCorr)
+    }
 }
 
 /// Turns music state into fixture states, 44 times per second.
@@ -60,36 +118,63 @@ public final class ShowEngine: @unchecked Sendable {
     public var holdLook = false
     public var flashHeld = false
     public var strobeHeld = false
-    private var nextLookRequested = false
+    /// Freeze the show where it is (clock, cue and positions stop).
+    public var paused = false
+    /// Fade to the default static look (and back when switched off).
+    public var staticLook = false
     /// Calibration / test mode: when set, these states are output as-is (fixtures not listed are dark).
     public var testStates: [Int: FixtureState]? = nil
+    private var nextLookRequested = false
 
     public private(set) var look = Look()
     public private(set) var status = EngineStatus()
 
     private var rng = SeededRandom(seed: UInt64(Date().timeIntervalSince1970))
+    private var clock = BeatClock()
+    private var prevLook: Look? = nil
+    private var fadeStart = 0.0
+    private var fadeLen = 0.0
     private var lastBar = Int.min
-    private var lastSection: MusicSection = .silence
     private var phraseOriginBar = 0
-    private var barsSinceLook = 0
-    private var barsSincePalette = 0
-    private var smoothedEnergy = 0.0
-    private var tier = 0
-    private var lastKickCount = 0
-    private var kickEnv = 0.0
+    private var phrasesSincePalette = 0
+    private var level = 1
+    private var slowEnergy = 0.5
+    private var confirmedSection: MusicSection = .silence
+    private var pendingSection: MusicSection? = nil
+    private var pendingSince = 0.0
+    private var sectionChangePending = false
+    private var personality = LightingPersonality.pop
+    private var committedStyle: MusicStyle = .pop
+    private var styleCandidate: MusicStyle? = nil
+    private var styleCandidateSince = 0.0
+    private var styleChangePending = false
     private var impactStartBeat: Double? = nil
     private var strobeOnTime = 0.0
     private var strobeCooldown = 0.0
-    private var aimState: [Int: (pan: Double, tilt: Double)] = [:]
-    private var colorState: [Int: RGB] = [:]
+    private var silentFor = 0.0
+    private var idleBlend = 0.0
+    private var staticBlend = 0.0
+    private var frozenShow: [Int: FixtureState]? = nil
+    private var post: [Int: PostState] = [:]
     private var lastStates: [Int: FixtureState] = [:]
     private var clockStart: Double? = nil
     private var currentMoodID: String? = nil
-    private var idleLevelState = 0.0
+    private var lastSource: MusicSource = .none
+    private var lastTrackProgress: Double = 0
 
-    public init(rig: Rig) {
+    struct PostState {
+        var pan = 0.0, tilt = 0.0, vPan = 0.0, vTilt = 0.0
+        var intensity = 0.0
+        var color = RGB.black
+    }
+
+    /// Number of cue changes so far (diagnostics / tests).
+    public private(set) var cueChanges = 0
+
+    public init(rig: Rig, seed: UInt64? = nil) {
         self.rig = rig
-        look = makeLook(pool: .groove, palettes: Palette.brandPalettes)
+        if let seed { rng = SeededRandom(seed: seed) }
+        look = evolve(Look(), pool: personality.levels[1], palettes: Palette.brandPalettes, full: true, palette: true)
     }
 
     public func requestNextLook() { nextLookRequested = true }
@@ -99,15 +184,10 @@ public final class ShowEngine: @unchecked Sendable {
     // MARK: - Tick
 
     public func tick(music input: MusicState, now: Double, dt: Double) -> [Int: FixtureState] {
-        var out: [Int: FixtureState] = [:]
-        var music = input
-        var pool: LookPool
-        var palettes: [Palette]
-        var moodMovement = 1.0
-        var allowStrobe = settings.strobeEnabled
         var st = EngineStatus()
 
         if let test = testStates {
+            var out: [Int: FixtureState] = [:]
             for fx in rig.fixtures {
                 var s = test[fx.id] ?? (lastStates[fx.id] ?? FixtureState())
                 if test[fx.id] == nil { s.intensity = 0 }
@@ -116,125 +196,120 @@ public final class ShowEngine: @unchecked Sendable {
             st.modeName = "Fixture test"
             st.special = "Test / calibration"
             status = st
-            lastStates = out
-            return out
+            let result = postProcess(out, dt: dt, fast: true, springHz: 1.2, maxSpeed: 120)
+            lastStates = result
+            return result
         }
+
+        var music = input
+        var palettes: [Palette]
+        var allowStrobe = settings.strobeEnabled
+        var fixedLevel: Int? = nil
 
         switch mode {
         case .off:
+            var out: [Int: FixtureState] = [:]
             for fx in rig.fixtures {
                 var s = lastStates[fx.id] ?? FixtureState()
                 s.intensity = 0
+                s.shutter = .open
                 out[fx.id] = s
             }
             st.modeName = "Off"
             status = st
-            lastStates = out
             clockStart = nil
-            return out
+            currentMoodID = nil
+            let result = postProcess(out, dt: dt, fast: false, springHz: 0.8, maxSpeed: 60)
+            lastStates = result
+            return result
 
         case .mood(let id):
             let mood = MoodShow.all.first { $0.id == id } ?? MoodShow.brandPulse
             if currentMoodID != id || clockStart == nil {
                 currentMoodID = id
-                clockStart = now
-                lastBar = Int.min
-                barsSinceLook = 1_000
-                barsSincePalette = 1_000
+                clockStart = now - (clock.initialized ? clock.beat * 60 / mood.bpm : 0)
+                personality = mood.personality
+                level = mood.level
+                prevLook = look; fadeStart = clock.beat; fadeLen = 4
+                look = evolve(look, pool: personality.levels[level], palettes: mood.palettes, full: true, palette: true)
+                phraseOriginBar = lastBar == Int.min ? 0 : lastBar
             }
             music = clockState(bpm: mood.bpm, energy: mood.energy, now: now)
-            pool = mood.pool
             palettes = mood.palettes
-            moodMovement = mood.movementScale
             allowStrobe = allowStrobe && mood.allowsStrobe
+            fixedLevel = mood.level
             st.modeName = "Mood: \(mood.name)"
+            st.styleName = mood.name
 
         case .audio:
-            currentMoodID = nil
-            clockStart = nil
-            let e = clamp(input.energy + settings.energyBias, 0, 1)
-            smoothedEnergy = smoothTowards(smoothedEnergy, e, dt: dt, timeConstant: 1.2)
-            tier = computeTier(energy: smoothedEnergy, section: input.section, current: tier)
-            pool = LookPool.tier(tier)
-            palettes = palettesForPolicy(calm: tier == 0)
-            st.modeName = input.source == .track ? "Auto: setlist" : "Auto: live input"
+            if currentMoodID != nil { currentMoodID = nil; clockStart = nil }
+            palettes = Palette.forMood(valence: music.vibe.isReady ? music.vibe.valence : 0.6,
+                                       arousal: music.vibe.isReady ? music.vibe.arousal : 0.6,
+                                       policy: settings.colorPolicy)
+            st.modeName = music.source == .track ? "Auto: setlist" : "Auto: live input"
         }
 
-        let beat = music.beat(at: now)
-        let barF = (beat - Double(music.downbeatOffset)) / 4
-        let bar = Int(floor(barF))
-        let beatInBar = music.beatInBar(beat)
-
-        // Kick envelope (from live analysis or the playback tap)
-        if music.kickCount != lastKickCount {
-            if music.kickCount > lastKickCount || music.kickCount < lastKickCount - 1000 { kickEnv = 1 }
-            lastKickCount = music.kickCount
+        // --- Clock (frozen while paused)
+        if !paused {
+            let follow = !(music.isSilent && music.source == .live)
+            clock.update(target: music.beat(at: now), targetBPM: music.bpm, dt: dt, follow: follow)
         }
-        kickEnv *= exp(-dt / 0.13)
+        let beat = clock.beat
+        let dbo = Double(music.downbeatOffset)
+        let bar = Int(floor((beat - dbo) / 4))
+        let barBeat = fmodPositive(beat - dbo, 4)
+        currentBar = bar
 
-        // Idle / silence handling (audio mode only)
-        let idle = mode == .audio && (music.isSilent || music.section == .silence)
-        idleLevelState = smoothTowards(idleLevelState, idle ? 1 : 0, dt: dt, timeConstant: idle ? 1.5 : 0.15)
-
-        // Section changes and look director
-        if mode == .audio && music.section != lastSection {
-            handleSectionChange(from: lastSection, to: music.section, beat: beat, bar: bar, music: music, pool: pool, palettes: palettes)
-            lastSection = music.section
-        }
-        if bar != lastBar {
-            if lastBar != Int.min {
-                barsSinceLook += 1
-                barsSincePalette += 1
+        // --- Director (frozen while paused)
+        if !paused {
+            if mode == .audio {
+                directAudio(music: music, beat: beat, dt: dt, palettes: palettes)
             }
-            lastBar = bar
-            let every = max(1, Int((Double(pool.changeEveryBars) * settings.lookChangeRate).rounded()))
-            if !holdLook && barsSinceLook >= every && (bar - phraseOriginBar) % every == 0 {
-                let changePalette = barsSincePalette >= every * 2
-                look = evolve(look, pool: pool, palettes: palettes, full: barsSinceLook > every * 4, palette: changePalette)
-                barsSinceLook = 0
-                if changePalette { barsSincePalette = 0 }
+            if let fl = fixedLevel { level = fl }
+            if bar != lastBar {
+                onBarLine(bar: bar, beat: beat, palettes: palettes)
+                lastBar = bar
+            }
+            if nextLookRequested {
+                nextLookRequested = false
+                startTransition(full: true, palette: true, fade: max(1, personality.fadeBeats / 2), beat: beat, palettes: palettes)
             }
         }
-        if nextLookRequested {
-            nextLookRequested = false
-            look = evolve(look, pool: pool, palettes: palettes, full: true, palette: true)
-            barsSinceLook = 0
-            barsSincePalette = 0
-        }
 
-        // Special moments (build-up / drop impact)
+        // --- Special moments
         var buildProgress: Double? = nil
         var gap = false
-        if mode == .audio {
-            if music.section == .build {
-                if let toNext = music.beatsToNextSection, music.nextSection == .drop || music.nextSection == .peak {
-                    let len = min(32, max(4, toNext + (beat - music.sectionStartBeat)))
-                    buildProgress = clamp(1 - toNext / len, 0, 1)
-                } else {
-                    buildProgress = clamp((beat - music.sectionStartBeat) / 32, 0, 1)
+        if mode == .audio && !paused {
+            if music.source == .track {
+                if let toNext = music.beatsToNextSection, music.nextSection == .drop, toNext <= 32, !music.section.isHigh {
+                    let len = min(32, max(8, toNext + (beat - music.sectionStartBeat)))
+                    if confirmedSection == .build || toNext <= 16 { buildProgress = clamp(1 - toNext / len, 0, 1) }
                 }
-            } else if let toNext = music.beatsToNextSection, music.nextSection == .drop, toNext <= 16, !music.section.isHigh {
-                buildProgress = clamp(1 - toNext / 16, 0, 1)
-            }
-            if settings.preDropGap, let toNext = music.beatsToNextSection, music.nextSection == .drop, toNext > 0, toNext < 0.5 {
-                gap = true
+                let gapStyles: Set<MusicStyle> = [.edm, .house, .drumAndBass, .hipHop, .pop]
+                if settings.preDropGap, gapStyles.contains(personality.style), let toNext = music.beatsToNextSection,
+                   music.nextSection == .drop, toNext > 0, toNext < 0.5 {
+                    gap = true
+                }
+            } else if confirmedSection == .build {
+                buildProgress = clamp((beat - pendingSince) / 32, 0, 1) * 0.7   // live: gentler, never a full ramp
             }
         }
         var impact: Double? = nil
         if let start = impactStartBeat {
             let since = beat - start
-            if since >= 0 && since < 1.5 { impact = since } else if since >= 1.5 { impactStartBeat = nil }
+            if since >= 0 && since < 2 { impact = since } else if since >= 2 { impactStartBeat = nil }
         }
 
-        // Strobe safety: never more than 4 s continuously, then 6 s rest.
+        // --- Strobe (rare, musical, with safety limits)
         var strobeWanted = false
-        if allowStrobe && strobeCooldown <= 0 {
-            if let p = buildProgress, p > 0.82 { strobeWanted = true }
+        if allowStrobe && strobeCooldown <= 0 && personality.strobe != .never {
             if let i = impact, i < 0.5 { strobeWanted = true }
-            if mode != .audio || tier >= 3 {
-                // short strobe hit on the last beat of every 4-bar phrase at peak energy
-                let phraseBeat = fmodPositive(beat - Double(music.downbeatOffset), 16)
-                if phraseBeat >= 15 && (mode == .audio ? smoothedEnergy > 0.85 : true) { strobeWanted = true }
+            if music.source == .track, let toNext = music.beatsToNextSection, music.nextSection == .drop,
+               toNext < 1.5, toNext > 0.5, !gap { strobeWanted = true }
+            if personality.strobe == .peaks && level == 2 {
+                let phraseBeat = fmodPositive(beat - dbo, 32)
+                let energetic = mode == .audio ? slowEnergy > 0.82 : true
+                if phraseBeat >= 31 && energetic { strobeWanted = true }
             }
         }
         if strobeHeld && settings.strobeEnabled { strobeWanted = true }
@@ -246,44 +321,313 @@ public final class ShowEngine: @unchecked Sendable {
             strobeCooldown = max(0, strobeCooldown - dt)
         }
 
-        // Render
+        // --- Render the show (or hold it while paused)
+        var out: [Int: FixtureState]
+        if paused, let frozen = frozenShow {
+            out = frozen
+        } else {
+            out = renderCue(look, beat: beat, barBeat: barBeat, bar: bar)
+            if let prev = prevLook, fadeLen > 0 {
+                let t = (beat - fadeStart) / fadeLen
+                if t >= 1 {
+                    prevLook = nil
+                } else {
+                    let from = renderCue(prev, beat: beat, barBeat: barBeat, bar: bar)
+                    out = blendFrames(from, out, clamp(t, 0, 1))
+                }
+            }
+            applyBuildAndImpact(&out, build: buildProgress, impact: impact, beat: beat)
+            frozenShow = out
+        }
+
+        // --- Idle (no music): ambient glow or blackout
+        if mode == .audio {
+            silentFor = music.isSilent ? silentFor + dt : 0
+            let threshold = music.source == .track ? 0.3 : 2.5
+            let idle = silentFor > threshold
+            idleBlend = smoothTowards(idleBlend, idle ? 1 : 0, dt: dt, timeConstant: idle ? 1.2 : 0.4)
+            if idle { st.special = "Idle" }
+        } else {
+            idleBlend = smoothTowards(idleBlend, 0, dt: dt, timeConstant: 0.4)
+        }
+        if idleBlend > 0.001 {
+            let idleFrame = makeIdleFrame(base: out, now: now)
+            out = blendFrames(out, idleFrame, idleBlend)
+        }
+
+        // --- Static look toggle
+        staticBlend = smoothTowards(staticBlend, staticLook ? 1 : 0, dt: dt, timeConstant: 0.6)
+        if staticBlend > 0.001 {
+            out = blendFrames(out, makeStaticFrame(), staticBlend > 0.995 ? 1 : staticBlend)
+        }
+
+        // --- Strobe, operator overrides, master
+        let fast = flashHeld || blackout || gap || (impact.map { $0 < 0.25 } ?? false)
+        for fx in rig.fixtures {
+            guard var s = out[fx.id] else { continue }
+            s.shutter = (strobeWanted && staticBlend < 0.5 && idleBlend < 0.5) ? .strobe(settings.strobeMaxRate) : .open
+            if gap && staticBlend < 0.5 { s.intensity = 0 }
+            if flashHeld { s.intensity = 1; s.color = s.color.mix(.white, 0.4) }
+            s.intensity = clamp(s.intensity * settings.masterDimmer, 0, 1)
+            if blackout { s.intensity = 0 }
+            if !settings.useGobos { s.gobo = 0; s.staticGobo = 0 }
+            out[fx.id] = s
+        }
+
+        let p = personality
+        let result = postProcess(out, dt: dt, fast: fast, springHz: staticBlend > 0.5 ? 0.6 : p.springHz,
+                                 maxSpeed: staticBlend > 0.5 ? 60 : p.maxSpeed, attack: p.attack, release: p.release)
+
+        // --- Status
+        st.levelName = ["Low", "Mid", "High"][clamp(level, 0, 2)]
+        st.section = mode == .audio ? confirmedSection : .groove
+        st.lookSummary = look.summary
+        st.paletteName = look.palette.name
+        st.bpm = clock.bpm
+        st.beatInBar = Int(floor(barBeat))
+        st.bar = bar
+        let phraseBars = effectivePhraseBars
+        st.phraseProgress = fmodPositive(Double(bar - phraseOriginBar) + barBeat / 4, Double(phraseBars)) / Double(phraseBars)
+        st.energy = mode == .audio ? slowEnergy : music.energy
+        st.strobing = strobeWanted
+        if mode == .audio {
+            st.styleName = personality.style.rawValue
+            st.styleIsManual = settings.styleOverride != nil
+            st.vibe = music.vibe
+        }
+        if gap { st.special = "Pre-drop gap" }
+        else if impact != nil { st.special = "DROP!" }
+        else if let bp = buildProgress { st.special = "Build-up \(Int(bp * 100))%" }
+        st.paused = paused
+        st.staticOn = staticLook
+        if paused { st.special = "Paused" }
+        if staticLook { st.special = "Static look" }
+        status = st
+        lastStates = result
+        return result
+    }
+
+    // MARK: - Director
+
+    private var effectivePhraseBars: Int {
+        max(4, Int((Double(personality.phraseBars) * settings.lookChangeRate).rounded()))
+    }
+
+    private func directAudio(music: MusicState, beat: Double, dt: Double, palettes: [Palette]) {
+        let isTrack = music.source == .track
+        // New track (or seek) on the setlist: start fresh with the track's own style.
+        if isTrack {
+            let prog = music.trackProgress ?? 0
+            if lastSource != .track || prog < lastTrackProgress - 0.02 {
+                styleChangePending = true
+                sectionChangePending = true
+            }
+            lastTrackProgress = prog
+        }
+        lastSource = music.source
+
+        slowEnergy = smoothTowards(slowEnergy, clamp(music.energy + settings.energyBias, 0, 1), dt: dt,
+                                   timeConstant: isTrack ? 2 : 5)
+
+        // Style: manual override, or the detected vibe once it's stable.
+        let detected = settings.styleOverride ?? (music.vibe.isReady ? music.vibe.style : committedStyle)
+        if settings.styleOverride != nil || isTrack {
+            if detected != committedStyle { committedStyle = detected; styleChangePending = true }
+        } else if detected != committedStyle {
+            if styleCandidate != detected { styleCandidate = detected; styleCandidateSince = 0 }
+            styleCandidateSince += dt
+            if styleCandidateSince > 30 && music.vibe.styleConfidence > 0.3 {
+                committedStyle = detected
+                styleChangePending = true
+                styleCandidate = nil
+            }
+        } else {
+            styleCandidate = nil
+        }
+
+        // Section confirmation: exact for analysed tracks, debounced for live audio.
+        if music.section != .silence && music.section != confirmedSection {
+            if isTrack {
+                let wasDrop = music.section == .drop
+                confirmedSection = music.section
+                pendingSince = music.sectionStartBeat
+                if wasDrop {
+                    executeDrop(beat: beat, palettes: palettes)
+                } else {
+                    sectionChangePending = true
+                }
+            } else {
+                if pendingSection != music.section { pendingSection = music.section; pendingSince = beat }
+                let need: Double = music.section == .drop ? 2 : 8
+                if beat - pendingSince >= need {
+                    let isDrop = music.section == .drop
+                    confirmedSection = music.section
+                    pendingSection = nil
+                    if isDrop && confirmedSection != .peak { sectionChangePending = true; dropOnNextBar = true }
+                    else { sectionChangePending = true }
+                }
+            }
+        } else if music.section == confirmedSection {
+            pendingSection = nil
+        }
+    }
+
+    private var dropOnNextBar = false
+
+    private func targetLevel() -> Int {
+        var l = level
+        let up: [Double] = [0.42, 0.72]
+        let down: [Double] = [0.32, 0.62]
+        while l < 2 && slowEnergy > up[l] { l += 1 }
+        while l > 0 && slowEnergy < down[l - 1] { l -= 1 }
+        switch confirmedSection {
+        case .ambient, .breakdown: l = 0
+        case .build: l = max(l, 1)
+        case .drop, .peak: l = 2
+        case .groove: l = max(1, l)
+        case .silence: break
+        }
+        return l
+    }
+
+    private func onBarLine(bar: Int, beat: Double, palettes: [Palette]) {
+        if mode == .audio {
+            if styleChangePending {
+                styleChangePending = false
+                personality = LightingPersonality.for(committedStyle)
+                level = targetLevel()
+                sectionChangePending = false
+                phraseOriginBar = bar
+                startTransition(full: true, palette: true, fade: personality.fadeBeats, beat: beat, palettes: palettes)
+                return
+            }
+            if sectionChangePending {
+                sectionChangePending = false
+                let newLevel = targetLevel()
+                level = newLevel
+                phraseOriginBar = bar
+                if dropOnNextBar {
+                    dropOnNextBar = false
+                    executeDrop(beat: beat, palettes: palettes)
+                } else if confirmedSection != .build {
+                    let fade = confirmedSection == .breakdown || confirmedSection == .ambient ? max(4, personality.fadeBeats) : personality.fadeBeats
+                    startTransition(full: true, palette: confirmedSection == .breakdown, fade: fade, beat: beat, palettes: palettes)
+                }
+                return
+            }
+        }
+        let phraseBars = effectivePhraseBars
+        let barsIn = bar - phraseOriginBar
+        if barsIn > 0 && barsIn % phraseBars == 0 && !holdLook {
+            let newLevel = mode == .audio ? targetLevel() : level
+            let levelChanged = newLevel != level
+            level = newLevel
+            phrasesSincePalette += 1
+            let changePalette = levelChanged || phrasesSincePalette >= 2
+            if changePalette { phrasesSincePalette = 0 }
+            startTransition(full: levelChanged, palette: changePalette, fade: personality.fadeBeats, beat: beat, palettes: palettes)
+        }
+    }
+
+    private func executeDrop(beat: Double, palettes: [Palette]) {
+        level = 2
+        phrasesSincePalette = 0
+        if personality.dropImpact { impactStartBeat = beat }
+        // Snap to the new cue on the drop (no fade).
+        cueChanges += 1
+        prevLook = nil
+        look = evolve(look, pool: personality.levels[2], palettes: palettes, full: true, palette: true)
+        phraseOriginBar = currentBar
+    }
+
+    private var currentBar = 0
+
+    private func startTransition(full: Bool, palette: Bool, fade: Double, beat: Double, palettes: [Palette]) {
+        let pool = personality.levels[clamp(level, 0, 2)]
+        let next = evolve(look, pool: pool, palettes: palettes, full: full, palette: palette)
+        cueChanges += 1
+        if fade > 0 {
+            prevLook = look
+            fadeStart = beat
+            fadeLen = fade
+        } else {
+            prevLook = nil
+        }
+        look = next
+    }
+
+    private func pick<T: Equatable>(_ options: [T], avoiding current: T) -> T {
+        guard !options.isEmpty else { return current }
+        let filtered = options.count > 1 ? options.filter { $0 != current } : options
+        return filtered[Int(rng.unit() * Double(filtered.count)) % filtered.count]
+    }
+
+    private func pickValue(_ options: [Double]) -> Double {
+        guard !options.isEmpty else { return 1 }
+        return options[Int(rng.unit() * Double(options.count)) % options.count]
+    }
+
+    /// Changes a cue. A partial evolve changes only one or two aspects so the show feels continuous.
+    private func evolve(_ l: Look, pool: LookPool, palettes: [Palette], full: Bool, palette: Bool) -> Look {
+        var n = l
+        n.level = pool.level
+        n.depth = pool.depth
+        if palette || !palettes.contains(n.palette) { n.palette = pick(palettes, avoiding: l.palette) }
+        var aspects: Set<Int> = full ? Set(0..<6) : [Int(rng.unit() * 6) % 6]
+        if !full && rng.unit() < 0.5 { aspects.insert(Int(rng.unit() * 6) % 6) }
+        if aspects.contains(0) || !pool.l7Color.contains(n.l7Color) { n.l7Color = pick(pool.l7Color, avoiding: l.l7Color) }
+        if aspects.contains(1) || !pool.l7Intensity.contains(n.l7Intensity) || !pool.chaseRates.contains(n.chaseRate) {
+            n.l7Intensity = pick(pool.l7Intensity, avoiding: l.l7Intensity)
+            n.chaseRate = pickValue(pool.chaseRates)
+        }
+        if aspects.contains(2) || !pool.l7Move.contains(n.l7Move) || !pool.cycleBeats.contains(n.moveCycleBeats) {
+            n.l7Move = pick(pool.l7Move, avoiding: l.l7Move)
+            n.moveCycleBeats = pickValue(pool.cycleBeats)
+            n.l7Zoom = lerp(pool.l7Zoom.lowerBound, pool.l7Zoom.upperBound, rng.unit())
+        }
+        if aspects.contains(3) || !pool.hybridColor.contains(n.hybridColor) { n.hybridColor = pick(pool.hybridColor, avoiding: l.hybridColor) }
+        var beams = pool.hybridBeam
+        if !settings.useGobos { beams = beams.filter { ![.goboSpin, .goboPrism, .softGobo].contains($0) } }
+        if beams.isEmpty { beams = [.beam] }
+        if aspects.contains(4) || !beams.contains(n.hybridBeam) {
+            n.hybridBeam = pick(beams, avoiding: l.hybridBeam)
+            n.gobo = Int(pickValue(pool.gobos.map(Double.init)))
+            n.hybridZoom = lerp(pool.hybridZoom.lowerBound, pool.hybridZoom.upperBound, rng.unit())
+        }
+        if aspects.contains(5) || !pool.hybridIntensity.contains(n.hybridIntensity) || !pool.hybridMove.contains(n.hybridMove) {
+            n.hybridIntensity = pick(pool.hybridIntensity, avoiding: l.hybridIntensity)
+            n.hybridMove = pick(pool.hybridMove, avoiding: l.hybridMove)
+        }
+        n.l7Zoom = clamp(n.l7Zoom, pool.l7Zoom.lowerBound, pool.l7Zoom.upperBound)
+        n.hybridZoom = clamp(n.hybridZoom, pool.hybridZoom.lowerBound, pool.hybridZoom.upperBound)
+        n.movementSize = personality.movementSize
+        return n
+    }
+
+    // MARK: - Rendering
+
+    private func renderCue(_ c: Look, beat: Double, barBeat: Double, bar: Int) -> [Int: FixtureState] {
+        var out: [Int: FixtureState] = [:]
+        let p = personality
+        let fxBeat = p.halfTime ? beat / 2 : beat
+        let amount = settings.movementAmount * c.movementSize
+        let accentAmt = p.accentAmount * Double(level) / 2
+        let accent = PatternMath.accent(p.accent, barBeat: barBeat, beat: beat) * accentAmt
         let l7s = rig.l7s
         let hybrids = rig.hybrids
-        let amount = settings.movementAmount * moodMovement
-        let energyScale = mode == .audio ? (0.55 + 0.45 * smoothedEnergy) : 1.0
-        let strobeRate = clamp(settings.strobeMaxRate * (buildProgress.map { 0.4 + 0.6 * $0 } ?? 1), 0, 1)
 
         for (i, fx) in l7s.enumerated() {
             let n = l7s.count
-            let x = n > 1 ? (Double(i) / Double(n - 1)) * 2 - 1 : 0
+            let x = n > 1 ? Double(i) / Double(n - 1) * 2 - 1 : 0
             var s = FixtureState()
-            var col = PatternMath.l7Color(look.l7Color, palette: look.palette, beat: beat, index: i, x: x)
-            var level = PatternMath.intensity(look.l7Intensity, beat: beat, index: i, count: n, rate: look.chaseRate,
-                                              cycle: look.moveCycleBeats, kickEnv: kickEnv, x: x)
-            level = look.floor + (1 - look.floor) * level
-            var aim = PatternMath.l7Aim(look.l7Move, beat: beat, index: i, x: x, cycle: look.moveCycleBeats, amount: amount)
-            var zoom = look.l7Zoom
-            if let p = buildProgress {
-                // Build-up: accelerating chase, rising beams, colours converge to the accent.
-                let rate = pow(2, floor(p * 3.99))
-                let chase = PatternMath.intensity(.chase, beat: beat, index: i, count: n, rate: rate, cycle: 4, kickEnv: 0, x: x)
-                level = (0.25 + 0.5 * p) + (0.75 - 0.5 * p) * chase * (1 - p) + p * 0.25
-                col = col.mix(look.palette.accent, p * 0.7)
-                aim = (lerp(aim.0, x * 30, p), lerp(aim.1, 6, p))
-                zoom = lerp(zoom, 0.0, p)
-            }
-            if let imp = impact {
-                level = max(level, exp(-imp * 1.5))
-                col = col.mix(.white, max(0, 0.6 - imp * 0.6))
-                zoom = 1
-            }
-            s.color = smoothColor(fx.id, col, dt: dt, tc: impact != nil ? 0.02 : look.colorFade)
-            s.intensity = level * energyScale
-            s.zoom = zoom
-            s.shutter = strobeWanted ? .strobe(strobeRate) : .open
-            let a = smoothAim(fx.id, aim, dt: dt, tc: look.moveSmoothing, calibration: fx.calibration)
-            s.pan = a.pan; s.tilt = a.tilt
-            s.moveSmoothing = look.moveSmoothing > 1 ? 0.5 : 0
+            s.color = PatternMath.l7Color(c.l7Color, palette: c.palette, beat: fxBeat, barBeat: barBeat, bar: bar,
+                                          index: i, x: x, fadeBeats: p.colorFadeBeats)
+            let pat = PatternMath.intensity(c.l7Intensity, beat: fxBeat, barBeat: barBeat, bar: bar, index: i, count: n,
+                                            rate: c.chaseRate, cycle: c.moveCycleBeats, x: x)
+            s.intensity = clamp(c.level * (1 - c.depth + c.depth * pat) + accent, 0, 1)
+            let aim = PatternMath.l7Aim(c.l7Move, beat: fxBeat, index: i, x: x, cycle: c.moveCycleBeats, amount: amount)
+            s.pan = aim.0; s.tilt = aim.1
+            s.zoom = c.l7Zoom
             out[fx.id] = s
         }
 
@@ -296,228 +640,180 @@ public final class ShowEngine: @unchecked Sendable {
             let chaseIndex = vOrder.firstIndex(of: number) ?? k
             let x = Double(chaseIndex) / 2.5 - 1
             var s = FixtureState()
-            var col = PatternMath.hybridColor(look.hybridColor, palette: look.palette, bar: bar, side: side, row: row)
-            var level = PatternMath.intensity(look.hybridIntensity, beat: beat, index: chaseIndex, count: hybrids.count,
-                                              rate: look.chaseRate, cycle: look.moveCycleBeats, kickEnv: kickEnv, x: x)
-            level = look.floor + (1 - look.floor) * level
-            var aim = PatternMath.hybridAim(look.hybridMove, beat: beat, number: number, side: side, row: row,
-                                            cycle: look.moveCycleBeats, amount: amount)
-            applyBeam(look.hybridBeam, to: &s, side: side)
-            s.zoom = look.hybridBeam == .wash ? max(0.7, look.hybridZoom) : look.hybridZoom
-            if let p = buildProgress {
-                aim = (lerp(aim.0, Double(side) * 65, p), lerp(aim.1, 12 + Double(row) * 6, p))
-                s.zoom = lerp(s.zoom, 0, p)
-                s.frost = 0
-                level = 0.3 + 0.7 * p
-                col = col.mix(look.palette.accent, p > 0.75 ? 1 : 0)
-            }
-            if let imp = impact {
-                level = max(level, exp(-imp * 1.2))
-            }
-            s.color = col
-            s.hybridColor = HybridColor.nearest(to: col)
-            s.intensity = level * energyScale
-            s.shutter = strobeWanted ? .strobe(strobeRate) : .open
-            let a = smoothAim(fx.id, aim, dt: dt, tc: look.moveSmoothing, calibration: fx.calibration)
-            s.pan = a.pan; s.tilt = a.tilt
-            s.moveSmoothing = look.moveSmoothing > 1 ? 0.5 : 0
+            s.color = PatternMath.hybridColor(c.hybridColor, palette: c.palette, side: side, row: row)
+            s.hybridColor = HybridColor.nearest(to: s.color)
+            let pat = PatternMath.intensity(c.hybridIntensity, beat: fxBeat, barBeat: barBeat, bar: bar, index: chaseIndex,
+                                            count: hybrids.count, rate: c.chaseRate * 0.5, cycle: c.moveCycleBeats, x: x)
+            s.intensity = clamp(c.level * (1 - c.depth * 0.8 + c.depth * 0.8 * pat), 0, 1)
+            let aim = PatternMath.hybridAim(c.hybridMove, beat: fxBeat, number: number, side: side, row: row,
+                                            cycle: c.moveCycleBeats, amount: amount)
+            s.pan = aim.0; s.tilt = aim.1
+            PatternMath.applyBeam(c.hybridBeam, gobo: c.gobo, to: &s, side: side)
+            s.zoom = c.hybridBeam == .wash ? max(0.7, c.hybridZoom) : c.hybridZoom
             out[fx.id] = s
         }
-
-        // Idle (no music): blend to a slow ambient glow or blackout.
-        if idleLevelState > 0.001 {
-            let t = now
-            for fx in rig.fixtures {
-                guard var s = out[fx.id] else { continue }
-                var idleIntensity = 0.0
-                if settings.idleBehaviour == .ambientGlow {
-                    idleIntensity = settings.idleLevel * (0.6 + 0.4 * sin(t * 0.4 + Double(fx.id) * 0.5))
-                    let c = fx.id % 2 == 0 ? RGB.brandGreen : RGB.brandMagenta
-                    s.color = s.color.mix(c, idleLevelState)
-                    s.hybridColor = idleLevelState > 0.5 ? HybridColor.nearest(to: c) : s.hybridColor
-                    if fx.kind == .focusHybrid { s.frost = max(s.frost, 0.7 * idleLevelState); s.gobo = 0; s.prism = 0 }
-                    s.zoom = lerp(s.zoom, 1, idleLevelState)
-                }
-                s.intensity = lerp(s.intensity, idleIntensity, idleLevelState)
-                s.shutter = .open
-                out[fx.id] = s
-            }
-        }
-
-        // Operator overrides and master
-        for fx in rig.fixtures {
-            guard var s = out[fx.id] else { continue }
-            if gap { s.intensity = 0 }
-            if flashHeld { s.intensity = 1; s.color = s.color.mix(.white, 0.5) }
-            s.intensity = clamp(s.intensity * settings.masterDimmer, 0, 1)
-            if blackout { s.intensity = 0 }
-            if !settings.useGobos { s.gobo = 0; s.staticGobo = 0 }
-            out[fx.id] = s
-        }
-
-        st.tierName = mode == .audio ? ["Calm", "Groove", "High", "Peak"][tier] : st.modeName
-        st.section = mode == .audio ? music.section : .groove
-        st.lookSummary = look.summary
-        st.paletteName = look.palette.name
-        st.bpm = music.bpm
-        st.beatInBar = Int(floor(beatInBar))
-        st.bar = bar
-        st.energy = mode == .audio ? smoothedEnergy : music.energy
-        st.strobing = strobeWanted
-        if gap { st.special = "Pre-drop gap" }
-        else if impact != nil { st.special = "DROP!" }
-        else if let p = buildProgress { st.special = "Build-up \(Int(p * 100))%" }
-        else if idle { st.special = "Idle" }
-        status = st
-        lastStates = out
         return out
     }
 
-    // MARK: - Director
-
-    private func computeTier(energy e: Double, section: MusicSection, current: Int) -> Int {
-        // Hysteresis so looks don't flip-flop at tier boundaries.
-        let up: [Double] = [0.34, 0.62, 0.84]
-        let down: [Double] = [0.26, 0.54, 0.76]
-        var t = current
-        while t < 3 && e > up[t] { t += 1 }
-        while t > 0 && e < down[t - 1] { t -= 1 }
-        switch section {
-        case .drop: t = max(t, 2)
-        case .peak: t = max(t, 2)
-        case .breakdown: t = min(t, 1)
-        case .ambient: t = min(t, 0)
-        default: break
+    private func applyBuildAndImpact(_ out: inout [Int: FixtureState], build: Double?, impact: Double?, beat: Double) {
+        let energetic: Set<MusicStyle> = [.edm, .house, .drumAndBass, .pop, .hipHop, .latin, .rock]
+        if let p = build {
+            let sub: Double = energetic.contains(personality.style) ? (p < 0.5 ? 1 : (p < 0.85 ? 2 : 4)) : 1
+            let riser = PatternMath.decay(fmodPositive(beat * sub, 1))
+            for (i, fx) in rig.l7s.enumerated() {
+                guard var s = out[fx.id] else { continue }
+                let x = rig.l7s.count > 1 ? Double(i) / Double(rig.l7s.count - 1) * 2 - 1 : 0
+                let target = (0.45 + 0.35 * p) + (0.2 + 0.15 * p) * riser
+                s.intensity = lerp(s.intensity, target, smoothstep(p * 1.5))
+                s.color = s.color.mix(look.palette.accent, p * 0.6)
+                s.pan = lerp(s.pan, x * 28, p * 0.8)
+                s.tilt = lerp(s.tilt, 8, p * 0.8)
+                s.zoom = lerp(s.zoom, 0, p)
+                out[fx.id] = s
+            }
+            for (k, fx) in rig.hybrids.enumerated() {
+                guard var s = out[fx.id] else { continue }
+                let side = (k + 1) % 2 == 1 ? -1.0 : 1.0
+                let row = Double(k / 2)
+                s.intensity = lerp(s.intensity, 0.5 + 0.5 * p, p)
+                s.zoom = lerp(s.zoom, 0, p)
+                s.frost = s.frost * (1 - p)
+                s.pan = lerp(s.pan, side * 62, p * 0.8)
+                s.tilt = lerp(s.tilt, 12 + row * 6, p * 0.8)
+                out[fx.id] = s
+            }
         }
-        return t
-    }
-
-    private func handleSectionChange(from old: MusicSection, to new: MusicSection, beat: Double, bar: Int,
-                                     music: MusicState, pool: LookPool, palettes: [Palette]) {
-        phraseOriginBar = bar
-        if new == .silence { return }
-        if new == .drop {
-            impactStartBeat = music.source == .track ? max(music.sectionStartBeat, beat - 0.25) : beat
-            tier = max(tier, 3)
-            look = evolve(look, pool: .peak, palettes: palettes, full: true, palette: true)
-        } else if new == .build {
-            return // the build-up is rendered as an overlay on the current look
-        } else {
-            look = evolve(look, pool: pool, palettes: palettes, full: true, palette: old == .breakdown || old == .silence || new == .breakdown)
-        }
-        barsSinceLook = 0
-        barsSincePalette = 0
-    }
-
-    private func palettesForPolicy(calm: Bool) -> [Palette] {
-        switch settings.colorPolicy {
-        case .brandOnly: return Palette.brandPalettes
-        case .brandMostly:
-            // Brand palettes are listed multiple times so they are picked ~75% of the time.
-            return Palette.brandPalettes + Palette.brandPalettes + Palette.brandPalettes + Palette.extraPalettes
-        case .anything: return Palette.all
+        if let imp = impact {
+            let e = PatternMath.decay(imp / 2)
+            for fx in rig.fixtures {
+                guard var s = out[fx.id] else { continue }
+                s.intensity = max(s.intensity, e)
+                if fx.kind == .focusFlexL7 { s.color = s.color.mix(.white, e * 0.5) }
+                out[fx.id] = s
+            }
         }
     }
 
-    private func pick<T: Equatable>(_ options: [T], avoiding current: T) -> T {
-        guard !options.isEmpty else { return current }
-        let filtered = options.count > 1 ? options.filter { $0 != current } : options
-        let idx = Int(rng.unit() * Double(filtered.count)) % filtered.count
-        return filtered[idx]
+    /// Crossfade between two frames. Hybrid wheel/gobo/prism changes happen "in black":
+    /// the fixture dims out on the old settings and fades up on the new ones.
+    private func blendFrames(_ a: [Int: FixtureState], _ b: [Int: FixtureState], _ t: Double) -> [Int: FixtureState] {
+        var out: [Int: FixtureState] = [:]
+        let e = smoothstep(t)
+        for fx in rig.fixtures {
+            guard let sa = a[fx.id] else { out[fx.id] = b[fx.id]; continue }
+            guard let sb = b[fx.id] else { out[fx.id] = sa; continue }
+            var o = sb
+            o.pan = lerp(sa.pan, sb.pan, e)
+            o.tilt = lerp(sa.tilt, sb.tilt, e)
+            o.zoom = lerp(sa.zoom, sb.zoom, e)
+            o.frost = lerp(sa.frost, sb.frost, e)
+            o.color = sa.color.mix(sb.color, e)
+            o.goboRotation = lerp(sa.goboRotation, sb.goboRotation, e)
+            o.prismRotation = lerp(sa.prismRotation, sb.prismRotation, e)
+            let discreteDiffers = fx.kind == .focusHybrid &&
+                ((sa.hybridColor ?? HybridColor.nearest(to: sa.color)) != (sb.hybridColor ?? HybridColor.nearest(to: sb.color))
+                 || sa.gobo != sb.gobo || sa.prism != sb.prism || sa.staticGobo != sb.staticGobo)
+            if discreteDiffers {
+                if t < 0.5 {
+                    o.hybridColor = sa.hybridColor ?? HybridColor.nearest(to: sa.color)
+                    o.gobo = sa.gobo; o.prism = sa.prism; o.staticGobo = sa.staticGobo; o.goboShake = sa.goboShake
+                    o.goboRotation = sa.goboRotation; o.prismRotation = sa.prismRotation
+                    o.intensity = sa.intensity * (1 - smoothstep(t * 2))
+                } else {
+                    o.intensity = sb.intensity * smoothstep(t * 2 - 1)
+                }
+            } else {
+                o.intensity = lerp(sa.intensity, sb.intensity, e)
+            }
+            o.shutter = t < 0.5 ? sa.shutter : sb.shutter
+            out[fx.id] = o
+        }
+        return out
     }
 
-    private func pickValue(_ options: [Double]) -> Double {
-        guard !options.isEmpty else { return 1 }
-        return options[Int(rng.unit() * Double(options.count)) % options.count]
+    /// The default static look: brand colours, calm fan, no movement.
+    public func makeStaticFrame() -> [Int: FixtureState] {
+        var out: [Int: FixtureState] = [:]
+        let lvl = settings.staticLevel
+        for (i, fx) in rig.l7s.enumerated() {
+            let n = rig.l7s.count
+            let x = n > 1 ? Double(i) / Double(n - 1) * 2 - 1 : 0
+            var s = FixtureState()
+            s.color = i % 2 == 0 ? .brandGreen : .brandMagenta
+            s.intensity = lvl
+            s.pan = x * 22
+            s.tilt = 20
+            s.zoom = 0.7
+            out[fx.id] = s
+        }
+        for (k, fx) in rig.hybrids.enumerated() {
+            let number = k + 1
+            let side = number % 2 == 1 ? -1.0 : 1.0
+            let row = Double(k / 2)
+            var s = FixtureState()
+            s.color = side < 0 ? .brandGreen : .brandMagenta
+            s.hybridColor = side < 0 ? .green : .magenta
+            s.intensity = lvl
+            s.pan = side * 60
+            s.tilt = 16 + row * 6
+            s.zoom = 0.45
+            s.frost = 0.3
+            out[fx.id] = s
+        }
+        return out
     }
 
-    private func makeLook(pool: LookPool, palettes: [Palette]) -> Look {
-        var l = Look()
-        l = evolve(l, pool: pool, palettes: palettes, full: true, palette: true)
-        return l
+    private func makeIdleFrame(base: [Int: FixtureState], now: Double) -> [Int: FixtureState] {
+        var out = base
+        for fx in rig.fixtures {
+            guard var s = out[fx.id] else { continue }
+            if settings.idleBehaviour == .ambientGlow {
+                let c: RGB = fx.id % 2 == 0 ? .brandGreen : .brandMagenta
+                s.color = c
+                s.hybridColor = HybridColor.nearest(to: c)
+                s.intensity = settings.idleLevel * (0.7 + 0.3 * sin(now * 0.35 + Double(fx.id) * 0.5))
+                if fx.kind == .focusHybrid { s.frost = 0.7; s.gobo = 0; s.prism = 0 }
+                s.zoom = 1
+            } else {
+                s.intensity = 0
+            }
+            out[fx.id] = s
+        }
+        return out
     }
 
-    /// Changes a look. A partial evolve changes only one or two aspects so the show feels continuous.
-    private func evolve(_ l: Look, pool: LookPool, palettes: [Palette], full: Bool, palette: Bool) -> Look {
-        var n = l
-        n.floor = pool.floor
-        n.moveSmoothing = pool.moveSmoothing
-        n.colorFade = pool.colorFade
-        n.l7Zoom = clamp(n.l7Zoom, pool.l7Zoom.lowerBound, pool.l7Zoom.upperBound)
-        n.hybridZoom = clamp(n.hybridZoom, pool.hybridZoom.lowerBound, pool.hybridZoom.upperBound)
-        if !pool.cycleBeats.contains(n.moveCycleBeats) { n.moveCycleBeats = pickValue(pool.cycleBeats) }
-        if !pool.chaseRates.contains(n.chaseRate) { n.chaseRate = pickValue(pool.chaseRates) }
-        if palette {
-            let p = pick(palettes, avoiding: l.palette)
-            n.palette = p
-        }
-        let aspects = full ? Set(0..<6) : Set([Int(rng.unit() * 6) % 6, Int(rng.unit() * 6) % 6])
-        // Keep everything inside the pool, even the aspects not being changed.
-        if full || !pool.l7Color.contains(n.l7Color) || aspects.contains(0) { n.l7Color = pick(pool.l7Color, avoiding: l.l7Color) }
-        if full || !pool.l7Intensity.contains(n.l7Intensity) || aspects.contains(1) {
-            n.l7Intensity = pick(pool.l7Intensity, avoiding: l.l7Intensity)
-            n.chaseRate = pickValue(pool.chaseRates)
-        }
-        if full || !pool.l7Move.contains(n.l7Move) || aspects.contains(2) {
-            n.l7Move = pick(pool.l7Move, avoiding: l.l7Move)
-            n.moveCycleBeats = pickValue(pool.cycleBeats)
-            n.l7Zoom = lerp(pool.l7Zoom.lowerBound, pool.l7Zoom.upperBound, rng.unit())
-        }
-        if full || !pool.hybridColor.contains(n.hybridColor) || aspects.contains(3) { n.hybridColor = pick(pool.hybridColor, avoiding: l.hybridColor) }
-        if full || !pool.hybridBeam.contains(n.hybridBeam) || aspects.contains(4) {
-            var beams = pool.hybridBeam
-            if !settings.useGobos { beams = beams.filter { ![.goboSpin, .goboPrism, .shake].contains($0) } }
-            if beams.isEmpty { beams = [.beam] }
-            n.hybridBeam = pick(beams, avoiding: l.hybridBeam)
-            n.gobo = Int(pickValue(pool.gobos.map(Double.init)))
-            n.hybridZoom = lerp(pool.hybridZoom.lowerBound, pool.hybridZoom.upperBound, rng.unit())
-        }
-        if full || !pool.hybridIntensity.contains(n.hybridIntensity) || aspects.contains(5) {
-            n.hybridIntensity = pick(pool.hybridIntensity, avoiding: l.hybridIntensity)
-            n.hybridMove = pick(pool.hybridMove, avoiding: l.hybridMove)
-        }
-        if !pool.hybridMove.contains(n.hybridMove) { n.hybridMove = pick(pool.hybridMove, avoiding: l.hybridMove) }
-        return n
-    }
+    // MARK: - Post processing: physical movement + intensity slew
 
-    private func applyBeam(_ beam: HybridBeam, to s: inout FixtureState, side: Int) {
-        let dir = Double(side)
-        switch beam {
-        case .wash:
-            s.frost = 0.65
-        case .beam:
-            break
-        case .prism:
-            s.prism = 1; s.prismRotation = 0.25 * dir
-        case .goboSpin:
-            s.gobo = look.gobo; s.goboRotation = 0.35 * dir
-        case .goboPrism:
-            s.gobo = look.gobo; s.goboRotation = 0.3 * dir; s.prism = 1; s.prismRotation = -0.2 * dir
-        case .linearPrism:
-            s.prism = 2; s.prismRotation = 0.15 * dir
-        case .shake:
-            s.gobo = look.gobo; s.goboShake = 0.6
+    private func postProcess(_ frame: [Int: FixtureState], dt: Double, fast: Bool, springHz: Double, maxSpeed: Double,
+                             attack: Double = 0.1, release: Double = 0.3) -> [Int: FixtureState] {
+        var out = frame
+        let w = 2 * Double.pi * springHz
+        for fx in rig.fixtures {
+            guard var s = out[fx.id] else { continue }
+            // Keep the target wall-safe before smoothing.
+            let safe = BeamGeometry.safeAim(pan: s.pan, tilt: s.tilt, calibration: fx.calibration)
+            var p = post[fx.id] ?? PostState(pan: safe.pan, tilt: safe.tilt, vPan: 0, vTilt: 0, intensity: 0, color: s.color)
+            // Critically damped spring with a speed limit → smooth, physical-looking moves.
+            let aPan = w * w * (safe.pan - p.pan) - 2 * w * p.vPan
+            let aTilt = w * w * (safe.tilt - p.tilt) - 2 * w * p.vTilt
+            p.vPan = clamp(p.vPan + aPan * dt, -maxSpeed, maxSpeed)
+            p.vTilt = clamp(p.vTilt + aTilt * dt, -maxSpeed, maxSpeed)
+            p.pan += p.vPan * dt
+            p.tilt += p.vTilt * dt
+            // Intensity slew limiting (no hard steps).
+            let up = fast ? dt / 0.03 : dt / max(attack, 0.02)
+            let down = fast ? dt / 0.05 : dt / max(release, 0.02)
+            let d = s.intensity - p.intensity
+            p.intensity += d > 0 ? min(d, up) : max(d, -down)
+            p.color = p.color.mix(s.color, fast ? 1 : 1 - exp(-dt / 0.08))
+            post[fx.id] = p
+            let aim = BeamGeometry.safeAim(pan: p.pan, tilt: p.tilt, calibration: fx.calibration)
+            s.pan = aim.pan; s.tilt = aim.tilt
+            s.intensity = clamp(p.intensity, 0, 1)
+            s.color = p.color
+            out[fx.id] = s
         }
-    }
-
-    // MARK: - Smoothing
-
-    private func smoothAim(_ id: Int, _ target: (Double, Double), dt: Double, tc: Double,
-                           calibration: FixtureCalibration) -> (pan: Double, tilt: Double) {
-        let safe = BeamGeometry.safeAim(pan: target.0, tilt: target.1, calibration: calibration)
-        guard let cur = aimState[id] else { aimState[id] = safe; return safe }
-        let p = smoothTowards(cur.pan, safe.pan, dt: dt, timeConstant: tc)
-        let t = smoothTowards(cur.tilt, safe.tilt, dt: dt, timeConstant: tc)
-        aimState[id] = (p, t)
-        return (p, t)
-    }
-
-    private func smoothColor(_ id: Int, _ target: RGB, dt: Double, tc: Double) -> RGB {
-        guard let cur = colorState[id] else { colorState[id] = target; return target }
-        let a = tc <= 0 ? 1 : 1 - exp(-dt / tc)
-        let c = cur.mix(target, a)
-        colorState[id] = c
-        return c
+        return out
     }
 
     private func clockState(bpm: Double, energy: Double, now: Double) -> MusicState {
@@ -530,8 +826,6 @@ public final class ShowEngine: @unchecked Sendable {
         s.section = .groove
         s.isSilent = false
         s.tempoConfidence = 1
-        // a synthetic kick on every beat so "kick" patterns also work in mood shows
-        s.kickCount = Int(floor(s.beatPosition))
         return s
     }
 }

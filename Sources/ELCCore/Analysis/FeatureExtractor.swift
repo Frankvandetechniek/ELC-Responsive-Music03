@@ -10,6 +10,10 @@ public struct FrameFeatures: Sendable {
     public var flux: [Double]
     /// Combined onset strength used for tempo/beat tracking.
     public var onset: Double
+    /// 12 pitch-class energies (C, C#, ... B), normalised to sum 1 (all zero when silent).
+    public var chroma: [Double]
+    /// Spectral centroid in Hz (brightness).
+    public var centroid: Double
 }
 
 /// Converts a stream of mono samples into `FrameFeatures` every `hop` samples.
@@ -26,6 +30,8 @@ public final class FeatureExtractor {
     private var prevLog: [Double]
     private var bandBins: [Range<Int>] = []
     private var samplesProcessed: Int = 0
+    private var chromaBins: [(bin: Int, pc: Int)] = []
+    private let binHz: Double
 
     public static let bandEdges: [(Double, Double)] = [(30, 150), (150, 500), (500, 4000), (4000, 14000)]
 
@@ -38,6 +44,15 @@ public final class FeatureExtractor {
         buffer = [Float](repeating: 0, count: fftSize)
         prevLog = [Double](repeating: 0, count: fftSize / 2)
         let binHz = sampleRate / Double(fftSize)
+        self.binHz = binHz
+        var cb: [(Int, Int)] = []
+        for k in 1..<(fftSize / 2) {
+            let f = Double(k) * binHz
+            guard f >= 65, f <= 2100 else { continue }
+            let midi = 69 + 12 * log2(f / 440)
+            cb.append((k, ((Int(midi.rounded()) % 12) + 12) % 12))
+        }
+        chromaBins = cb.map { (bin: $0.0, pc: $0.1) }
         bandBins = Self.bandEdges.map { lo, hi in
             let a = max(1, Int(lo / binHz))
             let b = min(fftSize / 2, max(a + 1, Int(hi / binHz)))
@@ -95,8 +110,16 @@ public final class FeatureExtractor {
             flux[bi] = f / Double(r.count)
         }
         for k in 0..<mags.count { prevLog[k] = log(1 + 1000 * mags[k]) }
+        var chroma = [Double](repeating: 0, count: 12)
+        var ctot = 0.0
+        for (k, pc) in chromaBins { let e = mags[k] * mags[k]; chroma[pc] += e; ctot += e }
+        if ctot > 1e-10 && rmsDb > -55 { for i in 0..<12 { chroma[i] /= ctot } } else { chroma = [Double](repeating: 0, count: 12) }
+        var num = 0.0, den = 0.0
+        let maxBin = min(mags.count, Int(12000 / binHz))
+        for k in 1..<maxBin { num += Double(k) * binHz * mags[k]; den += mags[k] }
+        let centroid = den > 1e-9 ? num / den : 0
         let onset = 1.6 * flux[0] + 0.8 * flux[1] + 1.0 * flux[2] + 0.6 * flux[3]
         let time = Double(samplesProcessed) / sampleRate
-        return FrameFeatures(time: time, rmsDb: rmsDb, bands: bands, flux: flux, onset: onset)
+        return FrameFeatures(time: time, rmsDb: rmsDb, bands: bands, flux: flux, onset: onset, chroma: chroma, centroid: centroid)
     }
 }

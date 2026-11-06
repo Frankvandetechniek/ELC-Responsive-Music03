@@ -10,7 +10,7 @@ public struct TrackSection: Codable, Equatable, Sendable {
 
 /// Result of analysing a complete audio file. Cached next to the setlist.
 public struct TrackAnalysis: Codable, Equatable, Sendable {
-    public static let currentVersion = 2
+    public static let currentVersion = 3
     public var version: Int = TrackAnalysis.currentVersion
     public var duration: Double
     public var bpm: Double
@@ -21,6 +21,17 @@ public struct TrackAnalysis: Codable, Equatable, Sendable {
     public var sections: [TrackSection]
     /// Peak amplitude overview (0...1) for drawing a waveform.
     public var overview: [Float]
+    /// Whole-track audio descriptors and the resulting style / mood.
+    public var vibeFeatures = VibeFeatures()
+    public var vibe = Vibe()
+
+    /// Re-runs the vibe model with instrument / vocal evidence from the sound classifier.
+    public func withEvidence(_ e: [SoundEvidence: Double]) -> TrackAnalysis {
+        var a = self
+        for (k, x) in e { a.vibeFeatures.evidence[k.rawValue] = x }
+        a.vibe = VibeModel.infer(a.vibeFeatures)
+        return a
+    }
 
     public var dropTimes: [Double] { sections.filter { $0.kind == .drop }.map { $0.startTime } }
 }
@@ -124,9 +135,28 @@ public enum TrackAnalyzer {
         var downbeat = accSum.indices.max(by: { accSum[$0] < accSum[$1] }) ?? 0
 
         let sections = detectSections(beatTimes: beatTimes, energy: energy, bass: bassN, downbeat: &downbeat)
+
+        // Vibe over the whole track, using the beat grid for rhythm descriptors.
+        var acc = VibeAccumulator(timeConstant: nil)
+        var bi = 0
+        let dtFrame = 1 / fps
+        for f in frames {
+            let t = f.time - hopOffset
+            while bi + 1 < nb && beatTimes[bi + 1] <= t { bi += 1 }
+            var pos: Double? = nil
+            if nb >= 2 && t >= beatTimes[0] && bi + 1 < nb {
+                pos = Double(bi) + (t - beatTimes[bi]) / (beatTimes[bi + 1] - beatTimes[bi])
+            }
+            acc.add(f, dt: dtFrame, beatPosition: pos, downbeatOffset: downbeat)
+        }
+        let clarity = TempoEstimator.estimate(onsets: Array(onsets.prefix(Int(fps * 60))), fps: fps)?.confidence ?? 0.5
+        let vf = acc.features(bpm: bpm, pulseClarity: clarity, evidence: [:])
         progress?(1)
-        return TrackAnalysis(duration: duration, bpm: bpm, beatTimes: beatTimes, downbeatOffset: downbeat,
-                             beatEnergy: energy, beatBass: bassN, sections: sections, overview: overview)
+        var result = TrackAnalysis(duration: duration, bpm: bpm, beatTimes: beatTimes, downbeatOffset: downbeat,
+                                   beatEnergy: energy, beatBass: bassN, sections: sections, overview: overview)
+        result.vibeFeatures = vf
+        result.vibe = VibeModel.infer(vf)
+        return result
     }
 
     static func detectSections(beatTimes: [Double], energy: [Double], bass: [Double], downbeat: inout Int) -> [TrackSection] {
@@ -276,6 +306,7 @@ public struct TrackMusicSource: Sendable {
         s.bpm = analysis.bpm
         s.downbeatOffset = analysis.downbeatOffset
         s.isSilent = !isPlaying
+        s.vibe = analysis.vibe
         s.trackProgress = analysis.duration > 0 ? t / analysis.duration : 0
         let bt = analysis.beatTimes
         let time = t + lookahead

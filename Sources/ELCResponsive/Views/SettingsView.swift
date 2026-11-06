@@ -107,13 +107,23 @@ struct ShowSettingsView: View {
                 Toggle("Allow strobe effects", isOn: $model.show.strobeEnabled)
                 LabeledSlider(label: "Max strobe speed", value: $model.show.strobeMaxRate, range: 0...1, format: "%.0f%%", scale: 100)
                     .disabled(!model.show.strobeEnabled)
-                Text("Strobe is only used on build-ups, drops and short peak hits; it is limited to 4 seconds at a time with a 6 second rest.")
+                Text("Strobe is only used on drops, the last beat before a known drop and (EDM only) short peak hits; never in ballads or ambient music. Limited to 4 seconds at a time with a 6 second rest.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Style") {
+                Picker("Lighting style", selection: $model.show.styleOverride) {
+                    Text("Auto (detected from the music)").tag(MusicStyle?.none)
+                    ForEach(MusicStyle.allCases) { Text($0.rawValue).tag(MusicStyle?.some($0)) }
+                }
+                Text("Auto uses the on-device vibe model (rhythm, key, tempo + Apple's built-in instrument/vocal classifier). Each style has its own lighting personality: phrase length, fade times, movement speed, accents and strobe use.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Section("Behaviour") {
                 LabeledSlider(label: "Movement size", value: $model.show.movementAmount, range: 0...1.5, format: "%.0f%%", scale: 100)
                 LabeledSlider(label: "Reactivity (energy bias)", value: $model.show.energyBias, range: -0.3...0.3, format: "%+.0f", scale: 100)
-                LabeledSlider(label: "Look change interval", value: $model.show.lookChangeRate, range: 0.5...3, format: "×%.1f", scale: 1)
+                LabeledSlider(label: "Look length (phrases)", value: $model.show.lookChangeRate, range: 0.5...3, format: "×%.1f", scale: 1)
+                LabeledSlider(label: "Static look intensity", value: $model.show.staticLevel, range: 0.1...1, format: "%.0f%%", scale: 100)
                 Toggle("Use gobos on the Hybrids", isOn: $model.show.useGobos)
                 Toggle("Short blackout right before a drop (setlist)", isOn: $model.show.preDropGap)
             }

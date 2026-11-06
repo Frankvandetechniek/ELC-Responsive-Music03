@@ -121,7 +121,7 @@ struct StageView: View {
     }
 }
 
-/// Music analysis + engine status.
+/// Music analysis + vibe + engine status.
 struct MusicPanel: View {
     @EnvironmentObject var model: AppModel
 
@@ -144,7 +144,6 @@ struct MusicPanel: View {
                     .frame(height: 18)
                 Meter(label: "Energy", value: model.status.energy, color: Theme.magenta)
                 Meter(label: "Bass", value: model.music.bass, color: Theme.green)
-                Meter(label: "Mid", value: model.music.mid, color: .yellow)
                 Meter(label: "High", value: model.music.high, color: .cyan)
                 if let toNext = model.music.beatsToNextSection, let next = model.music.nextSection, model.mode == .setlist {
                     Text("Next: \(next.rawValue) in \(Int(max(0, toNext))) beats")
@@ -152,25 +151,39 @@ struct MusicPanel: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .frame(maxWidth: 320)
+            .frame(maxWidth: 300)
+
+            VibePanel(vibe: model.status.vibe, styleName: model.status.styleName, manual: model.status.styleIsManual,
+                      active: model.mode == .live || model.mode == .setlist)
+                .frame(maxWidth: 300)
 
             Panel(title: "Show") {
                 row("Mode", model.status.modeName)
-                row("Energy tier", model.status.tierName)
+                row("Energy level", model.status.levelName)
                 row("Palette", model.status.paletteName)
-                row("Bar", "\(model.status.bar)  beat \(model.status.beatInBar + 1)")
+                HStack(spacing: 8) {
+                    Text("Phrase").font(.callout).foregroundStyle(.secondary)
+                    ProgressView(value: clamp(model.status.phraseProgress, 0, 1))
+                        .tint(Theme.green)
+                }
                 Text(model.status.lookSummary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if model.status.strobing {
-                    Text("STROBE").font(.caption.bold()).foregroundStyle(.yellow)
-                }
-                if model.blackout {
-                    Text("BLACKOUT ACTIVE").font(.caption.bold()).foregroundStyle(.red)
+                HStack(spacing: 6) {
+                    if model.status.paused { badge("PAUSED", .orange) }
+                    if model.status.staticOn { badge("STATIC LOOK", Theme.green) }
+                    if model.status.strobing { badge("STROBE", .yellow) }
+                    if model.blackout { badge("BLACKOUT", .red) }
                 }
             }
         }
+    }
+
+    private func badge(_ t: String, _ c: Color) -> some View {
+        Text(t).font(.caption2.bold()).foregroundStyle(.black)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Capsule().fill(c))
     }
 
     private func row(_ k: String, _ v: String) -> some View {
@@ -183,6 +196,56 @@ struct MusicPanel: View {
     }
 }
 
+/// Detected style / mood of the music.
+struct VibePanel: View {
+    let vibe: Vibe
+    let styleName: String
+    let manual: Bool
+    let active: Bool
+
+    var body: some View {
+        Panel(title: "Vibe") {
+            if !active {
+                Text("Style and mood are detected from live input or setlist tracks.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if !vibe.isReady && !manual {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("Listening… (about 10 s)").font(.callout).foregroundStyle(.secondary)
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(styleName.isEmpty ? vibe.style.rawValue : styleName)
+                        .font(.system(size: 17, weight: .heavy))
+                        .lineLimit(1)
+                    Spacer()
+                    if manual {
+                        Text("MANUAL").font(.caption2.bold()).padding(3)
+                            .background(RoundedRectangle(cornerRadius: 3).fill(Theme.magenta.opacity(0.6)))
+                    } else {
+                        Text("\(Int(vibe.styleConfidence * 100))%").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if vibe.isReady {
+                    HStack {
+                        Text(vibe.moodWord).font(.callout.bold()).foregroundStyle(Theme.green)
+                        if !vibe.key.isEmpty { Text("· \(vibe.key)").font(.callout).foregroundStyle(.secondary) }
+                    }
+                    Meter(label: "Arousal", value: vibe.arousal, color: .orange)
+                    Meter(label: "Valence", value: vibe.valence, color: .yellow)
+                    if !vibe.descriptors.isEmpty {
+                        Text(vibe.descriptors.joined(separator: " · "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct Meter: View {
     let label: String
     let value: Double
@@ -190,7 +253,7 @@ struct Meter: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(label).font(.caption).foregroundStyle(.secondary).frame(width: 46, alignment: .leading)
+            Text(label).font(.caption).foregroundStyle(.secondary).frame(width: 52, alignment: .leading)
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.black.opacity(0.4))

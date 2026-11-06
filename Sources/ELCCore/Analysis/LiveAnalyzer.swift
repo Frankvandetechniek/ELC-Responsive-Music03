@@ -153,6 +153,10 @@ public final class LiveAnalyzer: @unchecked Sendable {
     private var energy = EnergyTracker()
     private var sections = SectionDetector()
     private var audioTime = 0.0
+    private var vibeAcc = VibeAccumulator(timeConstant: 20)
+    private var vibeTimer = 0.0
+    private var vibe = Vibe()
+    private let evidenceBox = Locked<[SoundEvidence: Double]>([:])
     private let stateBox = Locked(MusicState())
 
     private let manualBox = Locked<Double?>(nil)
@@ -196,6 +200,9 @@ public final class LiveAnalyzer: @unchecked Sendable {
     public func nudge(_ beats: Double) {
         commands.mutate { $0.append { $0.beatPos += beats } }
     }
+
+    /// Instrument/vocal evidence from the on-device sound classifier (any thread).
+    public func updateSoundEvidence(_ e: [SoundEvidence: Double]) { evidenceBox.set(e) }
 
     private func applyMarkDownbeat() {
         downbeatOffset = ((Int(beatPos.rounded()) % 4) + 4) % 4
@@ -270,6 +277,17 @@ public final class LiveAnalyzer: @unchecked Sendable {
             currentAccent = max(currentAccent, f.flux[0] + 0.8 * f.flux[3])
         }
 
+        // --- vibe (style / mood), slow sliding window
+        vibeAcc.add(f, dt: dt, beatPosition: tempoConfidence > 0.15 ? beatPos : nil, downbeatOffset: downbeatOffset)
+        vibeTimer += dt
+        if vibeTimer >= 2 {
+            vibeTimer = 0
+            if vibeAcc.hasData && f.time > 8 {
+                let feats = vibeAcc.features(bpm: bpm, pulseClarity: tempoConfidence, evidence: evidenceBox.get())
+                vibe = VibeModel.infer(feats)
+            }
+        }
+
         // --- sections
         _ = sections.update(energy: energy.energy, bassPresence: energy.bassPresence,
                             silent: energy.isSilent, dt: dt, beat: beatPos)
@@ -324,6 +342,7 @@ public final class LiveAnalyzer: @unchecked Sendable {
         s.sectionStartBeat = sections.changedAtBeat
         s.tempoConfidence = tempoConfidence
         s.isSilent = energy.isSilent
+        s.vibe = vibe
         stateBox.set(s)
     }
 }

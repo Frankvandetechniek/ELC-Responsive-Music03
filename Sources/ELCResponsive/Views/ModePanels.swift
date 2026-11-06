@@ -9,6 +9,7 @@ struct LivePanel: View {
 
     var body: some View {
         VStack(spacing: 12) {
+            ShowControlPanel()
             Panel(title: "Audio input") {
                 HStack {
                     Picker("Device", selection: $model.selectedInputID) {
@@ -70,6 +71,62 @@ struct LivePanel: View {
     }
 }
 
+/// Pause / static look / style — the operator's main show controls.
+struct ShowControlPanel: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        Panel(title: "Show control") {
+            HStack(spacing: 10) {
+                Button {
+                    model.paused.toggle()
+                } label: {
+                    Label(model.paused ? "Resume show" : "Pause show",
+                          systemImage: model.paused ? "play.fill" : "pause.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(model.paused ? Color.orange : Theme.panelBorder))
+                        .foregroundStyle(model.paused ? Color.black : Color.white)
+                }
+                .buttonStyle(.plain)
+                .help("Freeze the lights exactly where they are (⌘P)")
+
+                Button {
+                    model.staticLook.toggle()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: model.staticLook ? "lightbulb.fill" : "lightbulb")
+                        Text("Static look")
+                        Text(model.staticLook ? "ON" : "OFF")
+                            .font(.system(size: 10, weight: .heavy))
+                            .padding(.horizontal, 5).padding(.vertical, 2)
+                            .background(Capsule().fill(model.staticLook ? Color.black.opacity(0.25) : Color.white.opacity(0.1)))
+                    }
+                    .font(.system(size: 13, weight: .bold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(model.staticLook ? Theme.green : Theme.panelBorder))
+                    .foregroundStyle(model.staticLook ? Color.black : Color.white)
+                }
+                .buttonStyle(.plain)
+                .help("Fade to the default static look (green/magenta, no movement) and back (⌘D)")
+            }
+            HStack {
+                Text("Lighting style").font(.callout).foregroundStyle(.secondary)
+                Spacer()
+                Picker("Lighting style", selection: $model.show.styleOverride) {
+                    Text("Auto (detected)").tag(MusicStyle?.none)
+                    Divider()
+                    ForEach(MusicStyle.allCases) { Text($0.rawValue).tag(MusicStyle?.some($0)) }
+                }
+                .labelsHidden()
+                .frame(width: 190)
+            }
+        }
+    }
+}
+
 // MARK: - Setlist
 
 struct SetlistPanel: View {
@@ -78,6 +135,7 @@ struct SetlistPanel: View {
 
     var body: some View {
         VStack(spacing: 12) {
+            ShowControlPanel()
             Panel(title: "Now playing") {
                 let track = model.setlist.first { $0.id == model.currentTrackID }
                 Text(track?.title ?? "Nothing loaded")

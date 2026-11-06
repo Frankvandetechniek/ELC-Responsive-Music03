@@ -46,6 +46,8 @@ public struct MusicState: Sendable {
     public var tempoConfidence: Double = 0
     public var isSilent: Bool = true
     public var trackProgress: Double? = nil
+    /// Detected style and mood.
+    public var vibe = Vibe()
 
     public init() {}
 

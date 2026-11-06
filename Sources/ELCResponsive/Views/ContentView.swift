@@ -67,6 +67,18 @@ struct TopBar: View {
                     .frame(width: 40, alignment: .trailing)
             }
             .help("Master dimmer")
+            Toggle(isOn: $model.paused) {
+                Label(model.paused ? "Paused" : "Pause", systemImage: model.paused ? "pause.circle.fill" : "pause.circle")
+            }
+            .toggleStyle(.button)
+            .tint(.orange)
+            .help("Freeze the show (⌘P)")
+            Toggle(isOn: $model.staticLook) {
+                Label("Static", systemImage: model.staticLook ? "lightbulb.fill" : "lightbulb")
+            }
+            .toggleStyle(.button)
+            .tint(Theme.green)
+            .help("Default static look on/off (⌘D)")
             Button {
                 model.nextLook()
             } label: {

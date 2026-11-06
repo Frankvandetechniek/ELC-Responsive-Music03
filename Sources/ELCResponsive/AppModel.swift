@@ -67,6 +67,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var mode: AppMode = .off
     @Published var blackout = false { didSet { let b = blackout; controller.perform { $0.engine.blackout = b } } }
     @Published var holdLook = false { didSet { let h = holdLook; controller.perform { $0.engine.holdLook = h } } }
+    /// Freeze the lighting show where it is.
+    @Published var paused = false { didSet { let p = paused; controller.perform { $0.engine.paused = p } } }
+    /// Default static look on/off.
+    @Published var staticLook = false { didSet { let s = staticLook; controller.perform { $0.engine.staticLook = s } } }
     @Published private(set) var status = EngineStatus()
     @Published private(set) var fixtureStates: [Int: FixtureState] = [:]
     @Published private(set) var frames: [UInt16: [UInt8]] = [:]
@@ -271,9 +275,12 @@ final class AppModel: ObservableObject {
         Task.detached(priority: .userInitiated) { [self] in
             do {
                 let (samples, sr) = try AudioDecoding.monoSamples(url: url)
-                let result = TrackAnalyzer.analyze(samples: samples, sampleRate: sr) { p in
-                    Task { @MainActor in self.analyzing[trackID] = p }
+                let base = TrackAnalyzer.analyze(samples: samples, sampleRate: sr) { p in
+                    Task { @MainActor in self.analyzing[trackID] = p * 0.85 }
                 }
+                // Instrument / vocal recognition with Apple's on-device sound classifier.
+                let evidence = FileSoundClassifier.evidence(url: url)
+                let result = evidence.isEmpty ? base : base.withEvidence(evidence)
                 AnalysisCache.save(result, for: url)
                 await MainActor.run {
                     self.analyzing[trackID] = nil

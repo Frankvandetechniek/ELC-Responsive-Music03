@@ -38,6 +38,10 @@ struct ELCResponsiveApp: App {
                     .keyboardShortcut("b", modifiers: [.command])
                 Button("Next Look") { model.nextLook() }
                     .keyboardShortcut("l", modifiers: [.command])
+                Toggle("Pause Show", isOn: $model.paused)
+                    .keyboardShortcut("p", modifiers: [.command])
+                Toggle("Static Look", isOn: $model.staticLook)
+                    .keyboardShortcut("d", modifiers: [.command])
                 Toggle("Hold Look", isOn: $model.holdLook)
                     .keyboardShortcut("h", modifiers: [.command, .shift])
                 Divider()
