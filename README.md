@@ -28,27 +28,35 @@ The goal is a show that looks programmed by a lighting designer, not an audio vi
 1. **Analysis**
    - Live input is analysed in real time for tempo, beat phase, bar/downbeat, energy and sections (groove, breakdown, build-up, drop, peak).
    - Setlist files are analysed once in advance. That gives an exact beat grid and sections, so drops and build-ups are known before they happen.
-2. **Vibe detection** works out the style and mood of the music, entirely on the Mac with no internet. It combines:
-   - Key and major/minor detection, using chroma and Krumhansl key profiles.
-   - Rhythm descriptors: four-on-the-floor, backbeat, syncopation, onset density, brightness and bass weight.
-   - **Apple's built-in neural sound classifier** (SoundAnalysis, about 300 classes). It recognises vocals, rap, electric/acoustic guitar, piano, strings, brass, synths, drums and Latin percussion.
-   - An interpretable mood model (arousal and valence) plus a classifier for 9 styles: Ambient, Ballad, Pop, Rock, Hip-hop, House/Techno, EDM, Drum & Bass and Latin.
+2. **Vibe detection** works out the genre and mood of the music, entirely on the Mac with no internet:
+   - **A neural genre/mood network:** a Swift port of **MusiCNN** by Pons & Serra (Music Technology Group, UPF; ISC license), trained on the Million Song Dataset.
+     - It predicts 50 tags. Genres include pop, rock, Hip-Hop, rnb, House, dance, electronic, acoustic, folk, soul, indie pop and metal. Moods include happy, sad, Mellow, chill, party, catchy and beautiful.
+     - The port was checked against the original TensorFlow model (`Tests/ELCCoreTests/MusiCNNTests.swift`).
+     - Setlist tracks are tagged as a whole when they are analysed. Live input is tagged every 5 s, with about 30 s of smoothing.
+   - **Apple's built-in neural sound classifier** (SoundAnalysis) for instruments and vocals.
+   - **Rhythm and harmony descriptors:** key/mode, four-on-the-floor, backbeat, syncopation and tempo. These are only used to break ties, for example House vs EDM, Drum & Bass tempo, or Latin percussion.
 
-   You can also force a style manually.
+   The result is one of 9 lighting styles plus a mood (arousal/valence). The top tags are shown in the Vibe panel, and you can force a style manually.
 3. **Lighting personality per style.** Each style has its own phrase length, fade times, movement speed, accents (for example on the backbeat in rock and hip-hop, half-time movement in DnB and trap, a soft pulse in house) and strobe policy. Palettes follow the mood, with brand colours always favoured.
-4. **Cue-based director**
+4. **Snare-driven chases.** The app learns where the snare or clap falls in the bar, on a 16th-note grid. In styles with a clear snare groove (pop, rock, hip-hop, EDM, DnB, Latin), the L7s often:
+   - **chase one fixture per snare hit**,
+   - **bump on the snare**, or
+   - **alternate on the snare**.
+
+   These patterns follow the learned groove on the beat clock, so they land exactly on the hit with no detection delay. The learned pattern is shown in the Music panel.
+5. **Cue-based director**
    - Looks change only on phrase boundaries (8 or 16 bars), with beat-timed crossfades. Live section changes must hold for a while before they count.
    - Hybrid colour-wheel, gobo and prism changes happen in black.
    - Energy decides *which* cue runs. **Intensity never follows loudness.**
-5. **Smooth output**
+6. **Smooth output**
    - A phase-locked beat clock follows the music without jumping or stepping back.
    - Pan/tilt run through a critically damped spring with a speed limit.
    - Intensity is limited per style by attack and release times.
-6. **Special moments**
+7. **Special moments**
    - Build-ups rise smoothly into known drops. Pop and dance styles get a short pre-drop gap and a drop impact.
    - Breakdowns go wide and soft.
    - When the music stops, the rig fades to an ambient brand-colour glow.
-7. **Strobe** is only used on drops and the last beat before a known drop, plus short peak hits for EDM. It is never used for ballads or ambient music, can be switched off, and never runs longer than 4 seconds.
+8. **Strobe** is only used on drops and the last beat before a known drop, plus short peak hits for EDM. It is never used for ballads or ambient music, can be switched off, and never runs longer than 4 seconds.
 
 ## Mood shows (slow → fast)
 

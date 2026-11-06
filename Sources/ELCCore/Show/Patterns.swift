@@ -14,6 +14,14 @@ public enum L7ColorPattern: String, CaseIterable, Codable, Sendable {
 
 public enum IntensityPattern: String, CaseIterable, Codable, Sendable {
     case steady, breathe, wave, pulse, halfPulse, barPulse, backbeat, chase, bounce, centerOut, alternate
+    /// Follow the song's snare: each snare hit moves the chase one fixture on (hit + fade).
+    case snareChase
+    /// Every snare hit bumps all fixtures.
+    case snareHit
+    /// Snare hits alternate between odd and even fixtures.
+    case snareAlternate
+
+    public var isSnare: Bool { self == .snareChase || self == .snareHit || self == .snareAlternate }
 }
 
 public enum L7Move: String, CaseIterable, Codable, Sendable {
@@ -50,6 +58,8 @@ public struct Look: Equatable, Sendable {
     public var level: Double = 0.85          // overall intensity of the cue
     public var depth: Double = 0.3           // how deep the intensity pattern modulates
     public var movementSize: Double = 1
+    /// Snare steps captured when the cue started (so a chase never jumps mid-cue).
+    public var snare: SnareSteps = .backbeat
 
     public init() {}
 
@@ -104,9 +114,23 @@ enum PatternMath {
     /// Intensity 0...1 for a fixture at `index` (in chase order) of `count`.
     /// `beat` is the continuous beat clock, `barBeat` the position within the bar (0..<4), `bar` the bar index.
     static func intensity(_ p: IntensityPattern, beat b: Double, barBeat: Double, bar: Int, index i: Int, count n: Int,
-                          rate: Double, cycle: Double, x: Double) -> Double {
+                          rate: Double, cycle: Double, x: Double, snare: SnareSteps = .backbeat) -> Double {
         let nD = Double(max(n, 1))
         switch p {
+        case .snareChase:
+            let pos = snare.position(bar: bar, barBeat: barBeat)
+            let s = pos.step
+            // most recent step that landed on this fixture
+            let back = ((s - i) % n + n) % n
+            let age = Double(back) * pos.interval + pos.since
+            return decay(age / (pos.interval * 1.6))
+        case .snareHit:
+            let pos = snare.position(bar: bar, barBeat: barBeat)
+            return decay(pos.since / (pos.interval * 0.9))
+        case .snareAlternate:
+            let pos = snare.position(bar: bar, barBeat: barBeat)
+            let on = ((pos.step + i) % 2 + 2) % 2 == 0
+            return on ? decay(pos.since / (pos.interval * 1.4)) : 0
         case .steady:
             return 1
         case .breathe:

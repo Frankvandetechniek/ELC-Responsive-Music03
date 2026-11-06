@@ -48,6 +48,9 @@ public struct MusicState: Sendable {
     public var trackProgress: Double? = nil
     /// Detected style and mood.
     public var vibe = Vibe()
+    /// Learned snare/clap pattern on a 16th grid (0...1 per slot) and how clear it is (0...1).
+    public var snarePattern: [Double] = []
+    public var snareClarity: Double = 0
 
     public init() {}
 

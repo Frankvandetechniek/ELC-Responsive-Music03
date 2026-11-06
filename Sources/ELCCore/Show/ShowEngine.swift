@@ -161,6 +161,8 @@ public final class ShowEngine: @unchecked Sendable {
     private var currentMoodID: String? = nil
     private var lastSource: MusicSource = .none
     private var lastTrackProgress: Double = 0
+    /// Current learned snare steps from the music (captured into each new cue).
+    private var currentSnare: SnareSteps = .backbeat
 
     struct PostState {
         var pan = 0.0, tilt = 0.0, vPan = 0.0, vTilt = 0.0
@@ -415,6 +417,7 @@ public final class ShowEngine: @unchecked Sendable {
 
     private func directAudio(music: MusicState, beat: Double, dt: Double, palettes: [Palette]) {
         let isTrack = music.source == .track
+        currentSnare = SnareSteps.from(pattern: music.snarePattern, clarity: music.snareClarity)
         // New track (or seek) on the setlist: start fresh with the track's own style.
         if isTrack {
             let prog = music.trackProgress ?? 0
@@ -577,7 +580,13 @@ public final class ShowEngine: @unchecked Sendable {
         if !full && rng.unit() < 0.5 { aspects.insert(Int(rng.unit() * 6) % 6) }
         if aspects.contains(0) || !pool.l7Color.contains(n.l7Color) { n.l7Color = pick(pool.l7Color, avoiding: l.l7Color) }
         if aspects.contains(1) || !pool.l7Intensity.contains(n.l7Intensity) || !pool.chaseRates.contains(n.chaseRate) {
-            n.l7Intensity = pick(pool.l7Intensity, avoiding: l.l7Intensity)
+            let snareOptions = pool.l7Intensity.filter { $0.isSnare }
+            // Songs with a clear snare groove (pop, rock, hip-hop...): usually let the L7s follow the snare.
+            if currentSnare.learned && !snareOptions.isEmpty && rng.unit() < 0.6 {
+                n.l7Intensity = pick(snareOptions, avoiding: l.l7Intensity)
+            } else {
+                n.l7Intensity = pick(pool.l7Intensity, avoiding: l.l7Intensity)
+            }
             n.chaseRate = pickValue(pool.chaseRates)
         }
         if aspects.contains(2) || !pool.l7Move.contains(n.l7Move) || !pool.cycleBeats.contains(n.moveCycleBeats) {
@@ -601,6 +610,7 @@ public final class ShowEngine: @unchecked Sendable {
         n.l7Zoom = clamp(n.l7Zoom, pool.l7Zoom.lowerBound, pool.l7Zoom.upperBound)
         n.hybridZoom = clamp(n.hybridZoom, pool.hybridZoom.lowerBound, pool.hybridZoom.upperBound)
         n.movementSize = personality.movementSize
+        n.snare = currentSnare
         return n
     }
 
@@ -623,8 +633,9 @@ public final class ShowEngine: @unchecked Sendable {
             s.color = PatternMath.l7Color(c.l7Color, palette: c.palette, beat: fxBeat, barBeat: barBeat, bar: bar,
                                           index: i, x: x, fadeBeats: p.colorFadeBeats)
             let pat = PatternMath.intensity(c.l7Intensity, beat: fxBeat, barBeat: barBeat, bar: bar, index: i, count: n,
-                                            rate: c.chaseRate, cycle: c.moveCycleBeats, x: x)
-            s.intensity = clamp(c.level * (1 - c.depth + c.depth * pat) + accent, 0, 1)
+                                            rate: c.chaseRate, cycle: c.moveCycleBeats, x: x, snare: c.snare)
+            let depth = c.l7Intensity.isSnare ? max(c.depth, 0.65) : c.depth
+            s.intensity = clamp(c.level * (1 - depth + depth * pat) + (c.l7Intensity.isSnare ? 0 : accent), 0, 1)
             let aim = PatternMath.l7Aim(c.l7Move, beat: fxBeat, index: i, x: x, cycle: c.moveCycleBeats, amount: amount)
             s.pan = aim.0; s.tilt = aim.1
             s.zoom = c.l7Zoom
@@ -643,8 +654,9 @@ public final class ShowEngine: @unchecked Sendable {
             s.color = PatternMath.hybridColor(c.hybridColor, palette: c.palette, side: side, row: row)
             s.hybridColor = HybridColor.nearest(to: s.color)
             let pat = PatternMath.intensity(c.hybridIntensity, beat: fxBeat, barBeat: barBeat, bar: bar, index: chaseIndex,
-                                            count: hybrids.count, rate: c.chaseRate * 0.5, cycle: c.moveCycleBeats, x: x)
-            s.intensity = clamp(c.level * (1 - c.depth * 0.8 + c.depth * 0.8 * pat), 0, 1)
+                                            count: hybrids.count, rate: c.chaseRate * 0.5, cycle: c.moveCycleBeats, x: x, snare: c.snare)
+            let hDepth = c.hybridIntensity.isSnare ? max(c.depth, 0.5) : c.depth * 0.8
+            s.intensity = clamp(c.level * (1 - hDepth + hDepth * pat), 0, 1)
             let aim = PatternMath.hybridAim(c.hybridMove, beat: fxBeat, number: number, side: side, row: row,
                                             cycle: c.moveCycleBeats, amount: amount)
             s.pan = aim.0; s.tilt = aim.1

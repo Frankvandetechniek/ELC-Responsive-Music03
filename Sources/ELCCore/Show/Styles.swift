@@ -109,16 +109,20 @@ public struct LightingPersonality: Sendable {
 
     public static let pop = LightingPersonality(
         style: .pop,
-        levels: [calmPool, grooveBase, highBase],
-        phraseBars: 8, fadeBeats: 2, attack: 0.12, release: 0.35, springHz: 1.0, maxSpeed: 90,
+        levels: [calmPool,
+                 tweak(grooveBase) { $0.l7Intensity += [.snareChase, .snareAlternate, .snareHit] },
+                 tweak(highBase) { $0.l7Intensity += [.snareChase, .snareHit, .snareAlternate]
+                     $0.hybridIntensity += [.snareHit, .snareAlternate] }],
+        phraseBars: 8, fadeBeats: 2, attack: 0.07, release: 0.35, springHz: 1.0, maxSpeed: 90,
         movementSize: 0.9, accent: .downbeat, accentAmount: 0.12, halfTime: false, strobe: .dropsOnly,
         dropImpact: true, colorFadeBeats: 1)
 
     public static let rock = LightingPersonality(
         style: .rock,
         levels: [tweak(calmPool) { $0.l7Color = [.uniformA, .split, .halves] },
-                 tweak(grooveBase) { $0.l7Intensity = [.steady, .backbeat, .alternate]; $0.hybridBeam = [.beam, .goboSpin, .prism] },
-                 tweak(highBase) { $0.l7Intensity = [.backbeat, .alternate, .pulse]; $0.hybridMove = [.cross, .sweep, .ballyhoo, .fan]
+                 tweak(grooveBase) { $0.l7Intensity = [.steady, .snareChase, .snareHit, .alternate]; $0.hybridBeam = [.beam, .goboSpin, .prism] },
+                 tweak(highBase) { $0.l7Intensity = [.snareHit, .snareChase, .snareAlternate, .alternate, .pulse]
+                     $0.hybridIntensity += [.snareHit]; $0.hybridMove = [.cross, .sweep, .ballyhoo, .fan]
                      $0.hybridBeam = [.beam, .goboPrism, .prism] }],
         phraseBars: 8, fadeBeats: 1, attack: 0.06, release: 0.3, springHz: 1.4, maxSpeed: 140,
         movementSize: 1.0, accent: .backbeat, accentAmount: 0.15, halfTime: false, strobe: .dropsOnly,
@@ -127,8 +131,8 @@ public struct LightingPersonality: Sendable {
     public static let hipHop = LightingPersonality(
         style: .hipHop,
         levels: [calmPool,
-                 tweak(grooveBase) { $0.l7Intensity = [.steady, .backbeat, .wave]; $0.chaseRates = [0.5]; $0.cycleBeats = [16, 32] },
-                 tweak(highBase) { $0.l7Intensity = [.backbeat, .halfPulse, .alternate]; $0.chaseRates = [0.5]
+                 tweak(grooveBase) { $0.l7Intensity = [.steady, .snareHit, .snareChase, .wave]; $0.chaseRates = [0.5]; $0.cycleBeats = [16, 32] },
+                 tweak(highBase) { $0.l7Intensity = [.snareHit, .snareChase, .snareAlternate, .halfPulse]; $0.chaseRates = [0.5]
                      $0.hybridMove = [.sweep, .cross, .figure8, .tiltWave] }],
         phraseBars: 8, fadeBeats: 2, attack: 0.08, release: 0.45, springHz: 0.8, maxSpeed: 70,
         movementSize: 0.8, accent: .backbeat, accentAmount: 0.12, halfTime: true, strobe: .dropsOnly,
@@ -137,7 +141,7 @@ public struct LightingPersonality: Sendable {
     public static let house = LightingPersonality(
         style: .house,
         levels: [tweak(calmPool) { $0.l7Intensity = [.wave, .breathe, .steady] },
-                 tweak(grooveBase) { $0.l7Intensity = [.wave, .steady, .chase, .barPulse]; $0.cycleBeats = [16, 32] },
+                 tweak(grooveBase) { $0.l7Intensity = [.wave, .steady, .chase, .barPulse, .snareAlternate]; $0.cycleBeats = [16, 32] },
                  tweak(highBase) { $0.l7Intensity = [.pulse, .chase, .centerOut, .wave]; $0.depth = 0.35; $0.cycleBeats = [16] }],
         phraseBars: 16, fadeBeats: 4, attack: 0.1, release: 0.4, springHz: 0.7, maxSpeed: 70,
         movementSize: 0.9, accent: .everyBeat, accentAmount: 0.08, halfTime: false, strobe: .dropsOnly,
@@ -145,8 +149,8 @@ public struct LightingPersonality: Sendable {
 
     public static let edm = LightingPersonality(
         style: .edm,
-        levels: [calmPool, grooveBase,
-                 tweak(highBase) { $0.depth = 0.5 }],
+        levels: [calmPool, tweak(grooveBase) { $0.l7Intensity += [.snareChase] },
+                 tweak(highBase) { $0.depth = 0.5; $0.l7Intensity += [.snareHit, .snareAlternate] }],
         phraseBars: 8, fadeBeats: 1, attack: 0.05, release: 0.3, springHz: 1.3, maxSpeed: 140,
         movementSize: 1.1, accent: .downbeat, accentAmount: 0.15, halfTime: false, strobe: .peaks,
         dropImpact: true, colorFadeBeats: 0.5)
@@ -155,7 +159,7 @@ public struct LightingPersonality: Sendable {
         style: .drumAndBass,
         levels: [calmPool,
                  tweak(grooveBase) { $0.chaseRates = [0.5] },
-                 tweak(highBase) { $0.chaseRates = [0.5, 1]; $0.l7Intensity = [.halfPulse, .chase, .bounce, .alternate] }],
+                 tweak(highBase) { $0.chaseRates = [0.5, 1]; $0.l7Intensity = [.halfPulse, .chase, .snareChase, .snareHit, .alternate] }],
         phraseBars: 8, fadeBeats: 1, attack: 0.06, release: 0.3, springHz: 1.2, maxSpeed: 120,
         movementSize: 1.0, accent: .backbeat, accentAmount: 0.1, halfTime: true, strobe: .dropsOnly,
         dropImpact: true, colorFadeBeats: 0.5)
@@ -164,6 +168,7 @@ public struct LightingPersonality: Sendable {
         style: .latin,
         levels: [tweak(calmPool) { $0.l7Color = [.gradient, .roll, .split] },
                  tweak(grooveBase) { $0.l7Move = [.panSway, .tiltWave, .circle]; $0.hybridMove = [.sweep, .figure8, .circle]
+                     $0.l7Intensity += [.snareChase]
                      $0.l7Color = [.roll, .gradient, .split, .alternateBar] },
                  tweak(highBase) { $0.l7Move = [.panSway, .circle, .tiltWave]; $0.l7Intensity = [.wave, .chase, .alternate, .pulse] }],
         phraseBars: 8, fadeBeats: 2, attack: 0.1, release: 0.4, springHz: 0.9, maxSpeed: 80,

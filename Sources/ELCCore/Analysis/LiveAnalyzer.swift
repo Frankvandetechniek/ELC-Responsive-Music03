@@ -154,6 +154,7 @@ public final class LiveAnalyzer: @unchecked Sendable {
     private var sections = SectionDetector()
     private var audioTime = 0.0
     private var vibeAcc = VibeAccumulator(timeConstant: 20)
+    private var groove = GrooveTracker(decayPerBar: 0.85)
     private var vibeTimer = 0.0
     private var vibe = Vibe()
     private let evidenceBox = Locked<[SoundEvidence: Double]>([:])
@@ -281,6 +282,11 @@ public final class LiveAnalyzer: @unchecked Sendable {
             currentAccent = max(currentAccent, f.flux[0] + 0.8 * f.flux[3])
         }
 
+        // --- snare groove (learned per 16th of the bar)
+        if tempoConfidence > 0.15 && !energy.isSilent {
+            groove.add(f, beatPosition: beatPos, downbeatOffset: downbeatOffset)
+        }
+
         // --- vibe (style / mood), slow sliding window
         vibeAcc.add(f, dt: dt, beatPosition: tempoConfidence > 0.15 ? beatPos : nil, downbeatOffset: downbeatOffset)
         vibeTimer += dt
@@ -348,6 +354,9 @@ public final class LiveAnalyzer: @unchecked Sendable {
         s.tempoConfidence = tempoConfidence
         s.isSilent = energy.isSilent
         s.vibe = vibe
+        let g = groove.pattern
+        s.snarePattern = g.slots
+        s.snareClarity = g.clarity
         stateBox.set(s)
     }
 }

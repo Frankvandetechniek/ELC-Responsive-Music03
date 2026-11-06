@@ -142,6 +142,8 @@ struct MusicPanel: View {
                 BeatIndicator(beat: model.music.beat(at: OutputController.monotonicNow()),
                               downbeat: model.music.downbeatOffset)
                     .frame(height: 18)
+                SnareGrooveView(pattern: model.music.snarePattern, clarity: model.music.snareClarity)
+                    .frame(height: 14)
                 Meter(label: "Energy", value: model.status.energy, color: Theme.magenta)
                 Meter(label: "Bass", value: model.music.bass, color: Theme.green)
                 Meter(label: "High", value: model.music.high, color: .cyan)
@@ -193,6 +195,29 @@ struct MusicPanel: View {
             Text(v).fontWeight(.semibold).lineLimit(1)
         }
         .font(.callout)
+    }
+}
+
+/// The learned snare pattern on a 16th grid (what the snare chases follow).
+struct SnareGrooveView: View {
+    let pattern: [Double]
+    let clarity: Double
+
+    var body: some View {
+        let steps = SnareSteps.from(pattern: pattern, clarity: clarity)
+        HStack(spacing: 2) {
+            Text("Snare").font(.caption).foregroundStyle(.secondary).frame(width: 52, alignment: .leading)
+            ForEach(0..<16, id: \.self) { i in
+                let v = i < pattern.count ? pattern[i] : 0
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(steps.slots.contains(i) && steps.learned ? Theme.magenta : Color.white.opacity(0.08 + 0.3 * v))
+                    .overlay(alignment: .bottom) {
+                        if i % 4 == 0 { Rectangle().fill(Color.white.opacity(0.4)).frame(height: 1) }
+                    }
+            }
+        }
+        .help(steps.learned ? "Learned snare pattern — snare chases step on the highlighted 16ths"
+                            : "No clear snare pattern yet — snare chases fall back to beats 2 and 4")
     }
 }
 

@@ -6,11 +6,14 @@ public struct TrackSection: Codable, Equatable, Sendable {
     public var kind: MusicSection
     public var startTime: Double
     public var energy: Double
+    /// Snare pattern of this section (16ths) and its clarity.
+    public var snarePattern: [Double] = []
+    public var snareClarity: Double = 0
 }
 
 /// Result of analysing a complete audio file. Cached next to the setlist.
 public struct TrackAnalysis: Codable, Equatable, Sendable {
-    public static let currentVersion = 4
+    public static let currentVersion = 5
     public var version: Int = TrackAnalysis.currentVersion
     public var duration: Double
     public var bpm: Double
@@ -24,6 +27,9 @@ public struct TrackAnalysis: Codable, Equatable, Sendable {
     /// Whole-track audio descriptors and the resulting style / mood.
     public var vibeFeatures = VibeFeatures()
     public var vibe = Vibe()
+    /// Whole-track snare pattern (fallback for sections without a clear one).
+    public var snarePattern: [Double] = []
+    public var snareClarity: Double = 0
 
     /// Re-runs the vibe model with instrument / vocal evidence from the sound classifier
     /// and/or MusiCNN genre & mood tags.
@@ -140,6 +146,9 @@ public enum TrackAnalyzer {
 
         // Vibe over the whole track, using the beat grid for rhythm descriptors.
         var acc = VibeAccumulator(timeConstant: nil)
+        var trackGroove = GrooveTracker(decayPerBar: nil)
+        var sectionGrooves = sections.map { _ in GrooveTracker(decayPerBar: nil) }
+        var si = 0
         var bi = 0
         let dtFrame = 1 / fps
         for f in frames {
@@ -150,12 +159,26 @@ public enum TrackAnalyzer {
                 pos = Double(bi) + (t - beatTimes[bi]) / (beatTimes[bi + 1] - beatTimes[bi])
             }
             acc.add(f, dt: dtFrame, beatPosition: pos, downbeatOffset: downbeat)
+            if let p = pos {
+                trackGroove.add(f, beatPosition: p, downbeatOffset: downbeat)
+                while si + 1 < sections.count && sections[si + 1].startBeat <= bi { si += 1 }
+                if si < sectionGrooves.count { sectionGrooves[si].add(f, beatPosition: p, downbeatOffset: downbeat) }
+            }
+        }
+        var sectionsWithGroove = sections
+        for i in sectionsWithGroove.indices {
+            let g = sectionGrooves[i].pattern
+            sectionsWithGroove[i].snarePattern = g.slots
+            sectionsWithGroove[i].snareClarity = g.clarity
         }
         let clarity = TempoEstimator.estimate(onsets: Array(onsets.prefix(Int(fps * 60))), fps: fps)?.confidence ?? 0.5
         let vf = acc.features(bpm: bpm, pulseClarity: clarity, evidence: [:])
         progress?(1)
         var result = TrackAnalysis(duration: duration, bpm: bpm, beatTimes: beatTimes, downbeatOffset: downbeat,
-                                   beatEnergy: energy, beatBass: bassN, sections: sections, overview: overview)
+                                   beatEnergy: energy, beatBass: bassN, sections: sectionsWithGroove, overview: overview)
+        let tg = trackGroove.pattern
+        result.snarePattern = tg.slots
+        result.snareClarity = tg.clarity
         result.vibeFeatures = vf
         result.vibe = VibeModel.infer(vf)
         return result
@@ -345,6 +368,11 @@ public struct TrackMusicSource: Sendable {
         if let idx = analysis.sections.lastIndex(where: { $0.startBeat <= bi }) {
             let sec = analysis.sections[idx]
             s.section = isPlaying ? sec.kind : .silence
+            if sec.snareClarity > 0.35 && sec.snarePattern.count == GrooveTracker.slots {
+                s.snarePattern = sec.snarePattern; s.snareClarity = sec.snareClarity
+            } else {
+                s.snarePattern = analysis.snarePattern; s.snareClarity = analysis.snareClarity
+            }
             s.sectionStartBeat = Double(sec.startBeat)
             if idx + 1 < analysis.sections.count {
                 let nx = analysis.sections[idx + 1]
