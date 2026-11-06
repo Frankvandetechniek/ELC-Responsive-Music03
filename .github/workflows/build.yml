@@ -19,6 +19,7 @@ jobs:
         run: |
           sw_vers || true
           swift --version
+          swift scripts/list_sound_classes.swift || true
 
       # The runner may itself run under Rosetta (x86_64) on Apple Silicon; force native arm64
       # so the test bundle architecture matches the build.
