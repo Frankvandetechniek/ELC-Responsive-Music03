@@ -23,18 +23,32 @@ The channel maps come from ADJ's official "DMX Traits" sheets for both fixtures.
 
 ## How the automatic show works
 
+The goal is a show that looks programmed by a lighting designer, not an audio visualiser.
+
 1. **Analysis**
-   - Live input is analysed in real time: FFT, onset detection, tempo by autocorrelation, and a beat phase-locked loop. The app also tracks kick, snare and hi-hat hits, loudness relative to the recent past ("energy"), bar/downbeat estimation and section detection (ambient, groove, breakdown, build-up, drop, peak).
-   - Setlist files get a full offline analysis: a beat grid (dynamic-programming beat tracker), downbeats, and sections. Drops and build-ups are known before they happen.
-2. **Director:** energy and section choose a tier: Calm, Groove, High or Peak. Every few bars, aligned to the phrase, it changes one or two parts of the look: colour pattern, intensity chase, movement, Hybrid beam (gobo, prism or frost), and the palette. The show keeps evolving without jumping around.
-3. **Special moments**
-   - **Build-up:** chases speed up, beams rise and narrow, and colours move to the accent colour. Strobe joins in at the very end.
-   - **Pre-drop gap:** a short blackout. Setlist mode only.
-   - **Drop:** a full-rig impact flash, then straight into a peak look.
-   - **Breakdown:** slow and wide, with frost on the Hybrids.
-   - **Silence:** fades to an ambient brand-colour glow, or to blackout.
-4. **Colours:** green and magenta/purple brand palettes by default. Under "Mostly brand", other palettes (ocean, sunset, fire, ice, toxic) are mixed in about 25% of the time. Hybrid colours map to the nearest colour-wheel slot.
-5. **Strobe** is only used on build-ups, drops and short peak hits. It can be turned off completely, and it never runs longer than 4 seconds at a time.
+   - Live input is analysed in real time for tempo, beat phase, bar/downbeat, energy and sections (groove, breakdown, build-up, drop, peak).
+   - Setlist files are analysed once in advance. That gives an exact beat grid and sections, so drops and build-ups are known before they happen.
+2. **Vibe detection** works out the style and mood of the music, entirely on the Mac with no internet. It combines:
+   - Key and major/minor detection, using chroma and Krumhansl key profiles.
+   - Rhythm descriptors: four-on-the-floor, backbeat, syncopation, onset density, brightness and bass weight.
+   - **Apple's built-in neural sound classifier** (SoundAnalysis, about 300 classes). It recognises vocals, rap, electric/acoustic guitar, piano, strings, brass, synths, drums and Latin percussion.
+   - An interpretable mood model (arousal and valence) plus a classifier for 9 styles: Ambient, Ballad, Pop, Rock, Hip-hop, House/Techno, EDM, Drum & Bass and Latin.
+
+   You can also force a style manually.
+3. **Lighting personality per style.** Each style has its own phrase length, fade times, movement speed, accents (for example on the backbeat in rock and hip-hop, half-time movement in DnB and trap, a soft pulse in house) and strobe policy. Palettes follow the mood, with brand colours always favoured.
+4. **Cue-based director**
+   - Looks change only on phrase boundaries (8 or 16 bars), with beat-timed crossfades. Live section changes must hold for a while before they count.
+   - Hybrid colour-wheel, gobo and prism changes happen in black.
+   - Energy decides *which* cue runs. **Intensity never follows loudness.**
+5. **Smooth output**
+   - A phase-locked beat clock follows the music without jumping or stepping back.
+   - Pan/tilt run through a critically damped spring with a speed limit.
+   - Intensity is limited per style by attack and release times.
+6. **Special moments**
+   - Build-ups rise smoothly into known drops. Pop and dance styles get a short pre-drop gap and a drop impact.
+   - Breakdowns go wide and soft.
+   - When the music stops, the rig fades to an ambient brand-colour glow.
+7. **Strobe** is only used on drops and the last beat before a known drop, plus short peak hits for EDM. It is never used for ballads or ambient music, can be switched off, and never runs longer than 4 seconds.
 
 ## Mood shows (slow → fast)
 
@@ -49,6 +63,9 @@ The channel maps come from ADJ's official "DMX Traits" sheets for both fixtures.
 
 ## Operator controls
 
+- **Pause show** (⌘P): freezes the lights exactly where they are.
+- **Static look** on/off (⌘D): fades to a calm default brand look (green/magenta, no movement) and back.
+- Lighting style: Auto (detected) or forced
 - Master dimmer
 - **Blackout** (⌘B)
 - **Flash** and **Strobe**: hold the button
