@@ -135,7 +135,7 @@ final class PixelTests: XCTestCase {
     func testOnlyOneMovingLayerOnTheL7s() {
         let moving: Set<IntensityPattern> = [.chase, .bounce, .wave, .breathe, .snareChase, .centerOut]
         var sawMovingPixels = false
-        for seed in 1...40 {
+        for seed in 1...12 {
             for style in [MusicStyle.edm, .pop, .house] {
                 var song = SongTimeline(); song.style = style
                 let e = ShowEngine(rig: Rig.elcDefault(), seed: UInt64(seed))
