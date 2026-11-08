@@ -307,18 +307,23 @@ public final class ShowEngine: @unchecked Sendable {
         var buildProgress: Double? = nil
         var gap = false
         if mode == .audio && !paused {
+            let p = personality
             if music.source == .track {
                 if let toNext = music.beatsToNextSection, music.nextSection == .drop, toNext <= 32, !music.section.isHigh {
                     let len = min(32, max(8, toNext + (beat - music.sectionStartBeat)))
-                    if confirmedSection == .build || toNext <= 16 { buildProgress = clamp(1 - toNext / len, 0, 1) }
+                    let ramp = clamp(1 - toNext / len, 0, 1)
+                    if p.dropMusic {
+                        if confirmedSection == .build || toNext <= 16 { buildProgress = ramp }
+                    } else if p.buildEffects && confirmedSection == .build {
+                        buildProgress = ramp * 0.55      // songs: a pre-chorus lift, not an EDM riser
+                    }
                 }
-                let gapStyles: Set<MusicStyle> = [.edm, .house, .drumAndBass, .hipHop, .pop]
-                if settings.preDropGap, gapStyles.contains(personality.style), let toNext = music.beatsToNextSection,
+                if settings.preDropGap, p.dropMusic, let toNext = music.beatsToNextSection,
                    music.nextSection == .drop, toNext > 0, toNext < 0.5 {
                     gap = true
                 }
-            } else if confirmedSection == .build {
-                buildProgress = clamp((beat - pendingSince) / 32, 0, 1) * 0.7   // live: gentler, never a full ramp
+            } else if confirmedSection == .build && p.buildEffects {
+                buildProgress = clamp((beat - pendingSince) / 32, 0, 1) * (p.dropMusic ? 0.7 : 0.45)   // live: gentler
             }
         }
         var entryHit: Double? = nil
@@ -336,8 +341,8 @@ public final class ShowEngine: @unchecked Sendable {
         var strobeWanted = false
         if allowStrobe && strobeCooldown <= 0 && personality.strobe != .never {
             if let i = impact, i < 0.5 { strobeWanted = true }
-            if music.source == .track, let toNext = music.beatsToNextSection, music.nextSection == .drop,
-               toNext < 1.5, toNext > 0.5, !gap { strobeWanted = true }
+            if music.source == .track, personality.dropMusic, let toNext = music.beatsToNextSection,
+               music.nextSection == .drop, toNext < 1.5, toNext > 0.5, !gap { strobeWanted = true }
             if personality.strobe == .peaks && level == 2 {
                 let phraseBeat = fmodPositive(beat - dbo, 32)
                 let energetic = mode == .audio ? slowEnergy > 0.82 : true
@@ -507,42 +512,45 @@ public final class ShowEngine: @unchecked Sendable {
         if !isTrack && music.dropCount != lastDropCount {
             let fresh = music.dropCount > lastDropCount && lastDropCount >= 0
             lastDropCount = music.dropCount
-            if fresh && !(confirmedSection == .drop && level == 2) {
-                confirmedSection = .drop
+            let target = musicalSection(.drop)
+            if fresh && !(confirmedSection == target && level == 2) {
+                confirmedSection = target
                 pendingSection = nil
                 dropOnNextBeat = false
                 sectionChangePending = false
                 levelCandidate = nil
                 // engine clock and analyser beat agree to within a few ms; take the beat that just started
                 let landed = beat - floor(beat) < 0.5 ? floor(beat) : beat
-                executeDrop(beat: landed, palettes: palettes)
+                if target == .drop { executeDrop(beat: landed, palettes: palettes) }
+                else { applySectionChange(bar: currentBar, beat: landed, palettes: palettes) }
             }
         }
 
         // Section confirmation: exact for analysed tracks, debounced for live audio.
-        if music.section != .silence && music.section != confirmedSection {
+        // A "drop" in a pop / rock / ballad song is its big chorus: it gets the chorus treatment.
+        let incoming = musicalSection(music.section)
+        if incoming != .silence && incoming != confirmedSection {
             if isTrack {
-                let wasDrop = music.section == .drop
-                confirmedSection = music.section
+                confirmedSection = incoming
                 pendingSince = music.sectionStartBeat
-                if wasDrop {
+                if incoming == .drop {
                     executeDrop(beat: beat, palettes: palettes)
                 } else {
-                    sectionChangePending = true
+                    // apply right away: analysed sections start exactly on their beat
+                    applySectionChange(bar: currentBar, beat: beat, palettes: palettes)
                 }
             } else {
-                if pendingSection != music.section { pendingSection = music.section; pendingSince = beat }
-                let need: Double = music.section == .drop ? 2 : 8
+                if pendingSection != incoming { pendingSection = incoming; pendingSince = beat }
+                let need: Double = incoming == .drop ? 2 : 8
                 if beat - pendingSince >= need {
-                    let isDrop = music.section == .drop
-                    confirmedSection = music.section
+                    confirmedSection = incoming
                     pendingSection = nil
                     // Live drop: hit it on the very next beat (not the next bar) so it lands right after the drop.
-                    if isDrop { dropOnNextBeat = true }
+                    if incoming == .drop { dropOnNextBeat = true }
                     else { sectionChangePending = true }
                 }
             }
-        } else if music.section == confirmedSection {
+        } else if incoming == confirmedSection {
             pendingSection = nil
         }
     }
@@ -582,19 +590,7 @@ public final class ShowEngine: @unchecked Sendable {
                 return
             }
             if sectionChangePending {
-                sectionChangePending = false
-                let oldLevel = level
-                level = targetLevel()
-                levelCandidate = nil
-                if dropOnNextBar {
-                    dropOnNextBar = false
-                    executeDrop(beat: beat, palettes: palettes)
-                } else if confirmedSection != .build {
-                    let soft = confirmedSection == .breakdown || confirmedSection == .ambient
-                    changeToSection(bar: bar, beat: beat, palettes: palettes,
-                                    fade: soft ? max(4, personality.fadeBeats) : personality.fadeBeats)
-                    if level == 2 && oldLevel < 2 && drive >= 0.35 { entryHitStartBeat = beat }
-                }
+                applySectionChange(bar: bar, beat: beat, palettes: palettes)
                 return
             }
             // Live: the section label can stay the same while the song clearly steps up or down
@@ -636,6 +632,30 @@ public final class ShowEngine: @unchecked Sendable {
             if changePalette { phrasesSincePalette = 0 }
             startTransition(full: levelChanged, palette: changePalette, fade: personality.fadeBeats, beat: beat, palettes: palettes)
         }
+    }
+
+    /// Maps the analysed section to how this style should be lit.
+    private func musicalSection(_ s: MusicSection) -> MusicSection {
+        if s == .drop && !personality.dropMusic { return .peak }
+        return s
+    }
+
+    /// Switches to the current section's look; a one-beat hit when a big section arrives (styles with a beat).
+    private func applySectionChange(bar: Int, beat: Double, palettes: [Palette]) {
+        sectionChangePending = false
+        let oldLevel = level
+        level = targetLevel()
+        levelCandidate = nil
+        if dropOnNextBar {
+            dropOnNextBar = false
+            executeDrop(beat: beat, palettes: palettes)
+            return
+        }
+        guard confirmedSection != .build else { return }
+        let soft = confirmedSection == .breakdown || confirmedSection == .ambient || !personality.buildEffects
+        changeToSection(bar: bar, beat: beat, palettes: palettes,
+                        fade: soft ? max(2, personality.fadeBeats) : personality.fadeBeats)
+        if level == 2 && oldLevel < 2 && drive >= 0.35 && personality.buildEffects { entryHitStartBeat = beat }
     }
 
     private func executeDrop(beat: Double, palettes: [Palette]) {

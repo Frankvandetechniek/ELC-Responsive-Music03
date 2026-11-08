@@ -68,11 +68,21 @@ The goal is a show that looks programmed by a lighting designer, not an audio vi
    - A phase-locked beat clock follows the music without jumping or stepping back.
    - Pan/tilt run through a critically damped spring with a speed limit.
    - Intensity is limited per style by attack and release times.
-8. **Special moments**
-   - Build-ups rise smoothly into known drops. Pop and dance styles get a short pre-drop gap and a drop impact.
-   - Breakdowns go wide and soft.
+8. **Special moments, lit the way the style expects**
+   - **EDM, house and DnB** get real drops: a riser build-up where the bars charge up, a short pre-drop blackout, a strobe burst and an impact flash.
+   - **Pop, rock, hip-hop and Latin:** the big section is a *chorus*. It gets the chorus look and a one-beat hit as it arrives. There's no blackout, strobe or riser, and the build-up is only a gentle lift.
+   - **Ballads and ambient** fade smoothly between sections with no hits.
    - When the music stops, the rig fades to an ambient brand-colour glow.
 9. **Strobe** is only used on drops and the last beat before a known drop, plus short peak hits for EDM. It is never used for ballads or ambient music, can be switched off, and never runs longer than 4 seconds.
+
+## Timing
+
+Every timing-critical path is covered by regression tests that run on synthetic music:
+- **Live input:** the beat clock is within ±5 ms of the kick, with 1–3 ms jitter, from 122 to 174 BPM. It uses comb-correlation phase tracking over the last ~6 s of onsets, with fine tempo refinement, and free-runs through drumless breakdowns.
+- **Setlist tracks:** the beat grid is within ±2 ms of the kick. Section boundaries are refined to the exact beat where the energy and bass jump, and drops land on "the 1".
+- **Live drops:** a dedicated detector recognises the kick and bass slamming back after a stretch without bass. It fires the drop on the beat it landed on, typically within 250 ms.
+
+If the lights still trail the sound because of your audio interface, network or fixtures, increase *Settings → Audio Analysis → lights ahead by*.
 
 ## Mood shows (slow → fast)
 

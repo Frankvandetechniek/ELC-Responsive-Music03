@@ -35,6 +35,11 @@ public struct LightingPersonality: Sendable {
     public var dropImpact: Bool
     public var colorFadeBeats: Double
 
+    /// Electronic dance music: real drops (riser build-up, pre-drop gap, strobe, impact).
+    public var dropMusic: Bool { [.edm, .house, .drumAndBass].contains(style) }
+    /// Build-ups and big-section hits at all (not for ballads / ambient).
+    public var buildEffects: Bool { style != .ballad && style != .ambient }
+
     public static func `for`(_ style: MusicStyle) -> LightingPersonality {
         switch style {
         case .ambient: return ambient

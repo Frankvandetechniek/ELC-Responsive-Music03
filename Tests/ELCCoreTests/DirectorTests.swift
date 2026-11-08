@@ -188,3 +188,61 @@ final class PixelTests: XCTestCase {
         XCTAssertGreaterThan(ch[28], 200); XCTAssertLessThan(ch[29], 30)
     }
 }
+
+final class StyleFitTests: XCTestCase {
+    let dt = 1.0 / 44
+
+    /// groove (0) → build (32) → "drop" (66, not on a bar line) → groove (98)
+    func run(_ style: MusicStyle) -> (specials: Set<String>, strobed: Bool, changeBeats: [Double], maxBuild: Int) {
+        let e = ShowEngine(rig: Rig.elcDefault(), seed: 5)
+        e.mode = .audio
+        e.settings.styleOverride = style
+        var t = 0.0
+        var specials = Set<String>(), strobed = false, changes: [Double] = [], last = e.cueChanges, maxBuild = 0
+        while t * 2 < 120 {                       // 120 BPM → 2 beats/s
+            t += dt
+            var m = MusicState()
+            m.source = .track; m.isSilent = false; m.timestamp = t; m.bpm = 120; m.beatPosition = t * 2
+            m.tempoConfidence = 1; m.trackProgress = m.beatPosition / 140
+            var v = Vibe(); v.isReady = true; v.style = style; v.arousal = 0.7; v.valence = 0.7; m.vibe = v
+            let b = m.beatPosition
+            if b < 32 { m.section = .groove; m.sectionEnergy = 0.5; m.nextSection = .build; m.beatsToNextSection = 32 - b }
+            else if b < 66 { m.section = .build; m.sectionStartBeat = 32; m.sectionEnergy = 0.55; m.nextSection = .drop; m.beatsToNextSection = 66 - b }
+            else if b < 98 { m.section = .drop; m.sectionStartBeat = 66; m.sectionEnergy = 0.9; m.nextSection = .groove; m.beatsToNextSection = 98 - b }
+            else { m.section = .groove; m.sectionStartBeat = 98; m.sectionEnergy = 0.5 }
+            let out = e.tick(music: m, now: t, dt: dt)
+            if !e.status.special.isEmpty { specials.insert(e.status.special.hasPrefix("Build-up") ? "Build-up" : e.status.special) }
+            if e.status.special.hasPrefix("Build-up "), let pct = Int(e.status.special.dropFirst(9).dropLast()) { maxBuild = max(maxBuild, pct) }
+            if out.values.contains(where: { if case .strobe = $0.shutter { return true } else { return false } }) { strobed = true }
+            if e.cueChanges != last { changes.append(b); last = e.cueChanges }
+        }
+        return (specials, strobed, changes, maxBuild)
+    }
+
+    func testEDMGetsTheFullDrop() {
+        let r = run(.edm)
+        XCTAssertTrue(r.specials.contains("DROP!"))
+        XCTAssertTrue(r.specials.contains("Pre-drop gap"))
+        XCTAssertTrue(r.strobed)
+        XCTAssertTrue(r.changeBeats.contains { abs($0 - 66) < 0.06 }, "\(r.changeBeats)")
+    }
+
+    func testPopChorusIsNotLitLikeAnEDMDrop() {
+        let r = run(.pop)
+        XCTAssertFalse(r.specials.contains("DROP!"), "\(r.specials)")
+        XCTAssertFalse(r.specials.contains("Pre-drop gap"))
+        XCTAssertFalse(r.strobed)
+        XCTAssertTrue(r.specials.contains("Hit!"), "chorus arrival hit missing: \(r.specials)")
+        XCTAssertLessThanOrEqual(r.maxBuild, 55, "pop build-up should be a gentle lift")
+        // the chorus look arrives exactly on its (mid-bar) beat, not on the next bar line
+        XCTAssertTrue(r.changeBeats.contains { abs($0 - 66) < 0.06 }, "\(r.changeBeats)")
+    }
+
+    func testBalladHasNoHitsOrBuildEffects() {
+        let r = run(.ballad)
+        XCTAssertFalse(r.specials.contains("DROP!"))
+        XCTAssertFalse(r.specials.contains("Hit!"))
+        XCTAssertFalse(r.specials.contains("Build-up"))
+        XCTAssertFalse(r.strobed)
+    }
+}
