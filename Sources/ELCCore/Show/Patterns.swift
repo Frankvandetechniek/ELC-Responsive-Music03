@@ -40,6 +40,27 @@ public enum HybridMove: String, CaseIterable, Codable, Sendable {
     case vUp, fan, cross, forward, audience, circle, figure8, tiltWave, sweep, ballyhoo
 }
 
+/// What happens *inside* each Flex L7 bar (7 RGB+Lime pixels; the 6 bars form one 42-pixel line).
+public enum L7PixelPattern: String, CaseIterable, Codable, Sendable {
+    /// all pixels the bar colour
+    case solid
+    /// left half colour A, right half colour B
+    case split
+    /// A → B across each bar
+    case gradient
+    /// one slow A → B → A sweep across the whole 42-pixel line, drifting
+    case lineGradient
+    /// soft brightness wave rolling along the whole line
+    case wave
+    /// a bright band travelling from the centre of the rig outwards once per bar
+    case travel
+    /// every beat each bar opens from its centre outwards
+    case centerPulse
+
+    /// Patterns that move by themselves (paired only with steady bar intensities).
+    public var isMoving: Bool { self == .wave || self == .travel || self == .centerPulse || self == .lineGradient }
+}
+
 public enum FixtureFocus: String, Codable, Sendable {
     case both, l7, hybrids
 }
@@ -70,6 +91,8 @@ public struct Look: Equatable, Sendable {
     public var drive: Double = 0.5
     /// Final chorus / last drop: everything a bit bigger.
     public var lift: Bool = false
+    /// Pixel effect inside the L7 bars.
+    public var l7Pixels: L7PixelPattern = .solid
 
     public init() {}
 
@@ -94,15 +117,19 @@ public struct LookPool: Sendable {
     public var level: Double
     public var depth: Double
     public var gobos: [Int] = [2, 3, 5, 6, 7]
+    /// Pixel effects allowed inside the L7 bars.
+    public var l7Pixels: [L7PixelPattern] = [.solid, .split, .gradient]
 
     public init(l7Color: [L7ColorPattern], l7Intensity: [IntensityPattern], l7Move: [L7Move],
                 hybridColor: [HybridColorPattern], hybridBeam: [HybridBeam], hybridIntensity: [IntensityPattern],
                 hybridMove: [HybridMove], cycleBeats: [Double], chaseRates: [Double],
-                l7Zoom: ClosedRange<Double>, hybridZoom: ClosedRange<Double>, level: Double, depth: Double) {
+                l7Zoom: ClosedRange<Double>, hybridZoom: ClosedRange<Double>, level: Double, depth: Double,
+                pixels: [L7PixelPattern] = [.solid, .split, .gradient]) {
         self.l7Color = l7Color; self.l7Intensity = l7Intensity; self.l7Move = l7Move
         self.hybridColor = hybridColor; self.hybridBeam = hybridBeam; self.hybridIntensity = hybridIntensity
         self.hybridMove = hybridMove; self.cycleBeats = cycleBeats; self.chaseRates = chaseRates
         self.l7Zoom = l7Zoom; self.hybridZoom = hybridZoom; self.level = level; self.depth = depth
+        self.l7Pixels = pixels
     }
 }
 
@@ -262,6 +289,47 @@ enum PatternMath {
             let p = 34 * amount * (0.6 * sin(w * 0.5 + k) + 0.4 * sin(w * 0.8 + 2 * k))
             let t = 34 + 16 * amount * (0.6 * sin(w * 0.6 + 3 * k) + 0.4 * cos(w * 0.9 + k))
             return (s * 15 + p, t)
+        }
+    }
+
+    /// Per-pixel colours for one L7 bar. `bar` 0...5 left → right, `colour` = the bar's colour from the colour pattern.
+    static func l7Pixels(_ p: L7PixelPattern, palette: Palette, colour: RGB, bar: Int, bars: Int,
+                         beat b: Double, barBeat: Double, cycle: Double) -> [RGB]? {
+        let n = 7
+        let total = Double(max(bars * n - 1, 1))
+        switch p {
+        case .solid:
+            return nil
+        case .split:
+            return (0..<n).map { i in i < 3 ? palette.a : (i > 3 ? palette.b : palette.a.mix(palette.b, 0.5)) }
+        case .gradient:
+            return (0..<n).map { palette.a.mix(palette.b, Double($0) / Double(n - 1)) }
+        case .lineGradient:
+            return (0..<n).map { i in
+                let u = Double(bar * n + i) / total
+                let t = 0.5 - 0.5 * cos(2 * .pi * (u - b / max(cycle * 2, 16)))
+                return palette.a.mix(palette.b, t)
+            }
+        case .wave:
+            return (0..<n).map { i in
+                let u = Double(bar * n + i) / total
+                let w = 0.5 + 0.5 * sin(2 * .pi * (u * 1.5 - b / max(cycle, 4)))
+                return colour.scaled(0.3 + 0.7 * w)
+            }
+        case .travel:
+            // From the centre of the rig outwards, once per bar (mirrored left/right).
+            let phase = barBeat / 4
+            return (0..<n).map { i in
+                let u = abs(Double(bar * n + i) / total * 2 - 1)        // 0 centre ... 1 outer ends
+                return colour.scaled(0.15 + 0.85 * window(u - phase * 1.15, 0.22))
+            }
+        case .centerPulse:
+            let ph = fmodPositive(b, 1)
+            return (0..<n).map { i in
+                let d = abs(Double(i) - 3) / 3                         // 0 bar centre ... 1 bar ends
+                let open = window(d - ph * 1.2, 0.45) * decay(ph * 0.8)
+                return colour.scaled(0.2 + 0.8 * open)
+            }
         }
     }
 

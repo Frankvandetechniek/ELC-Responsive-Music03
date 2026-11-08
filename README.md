@@ -12,8 +12,14 @@ The music can come from:
 
 | # | Fixture | Mode | DMX address |
 |---|---------|------|-------------|
-| 1–6 | ADJ Focus Flex L7 (numbered left → right) | **16 ch "Basic"** | 1, 17, 33, 49, 65, 81 |
-| 7–12 | ADJ Focus Hybrid 1–6 (V shape) | **19 ch** | 97, 116, 135, 154, 173, 192 |
+| 1–6 | ADJ Focus Flex L7 (numbered left → right) | **50 ch "Extended 7"** | 1, 51, 101, 151, 201, 251 |
+| 7–12 | ADJ Focus Hybrid 1–6 (V shape) | **25 ch** | 301, 326, 351, 376, 401, 426 |
+
+The app uses everything these modes add:
+- **16-bit pan, tilt, dimmer and zoom** on both fixture types, for smooth slow moves and fades with no stepping.
+- **7 individually controlled RGB+Lime pixels** in every L7. The six bars act as one 42-pixel line.
+
+Settings saved with the old 16/19-channel patch move to the new addresses automatically on first launch. Each fixture keeps its calibration.
 
 Hybrid numbering follows the plot. 1/2 is the upstage pair, 3/4 is the middle pair and 5/6 is the downstage pair. Odd numbers are on the left.
 
@@ -50,15 +56,23 @@ The goal is a show that looks programmed by a lighting designer, not an audio vi
    - **Dynamic contrast.** In low sections one fixture group carries the look and the other stays in the background ("darkness is free"). Choruses and drops use the full rig.
    - **Hits.** A one-beat hit marks the arrival of a big section, and a full impact marks a drop ("jump to a 10, don't land on it"). Live drops hit on the next beat.
    - **Drive.** How dynamic a song is lit, from ballad to festival EDM. It comes from the style plus the mood (arousal/valence) and how electronic the music is according to the neural tags. A high drive means faster and bigger movement, deeper beat pulses, stronger accents, tighter beams and punchier fades. EDM drops get beat pulses, colour swaps on the bar, flying beams and strobe stabs.
-6. **Smooth output**
+6. **L7 pixel effects.** Each look can add an effect *inside* the bars:
+   - colour split or gradient per bar
+   - a slow gradient drifting across the whole 42-pixel line
+   - a soft wave rolling along the line
+   - a band travelling from the centre of the rig outwards once per bar (high energy)
+   - bars opening from their centre on every beat (EDM drops)
+
+   Following the "effects continue the look" rule, only one layer moves at a time. A chase across the bars gets static pixels, and a moving pixel effect sits on steady bars. During build-ups the bars **charge up from their centre outwards** until the drop.
+7. **Smooth output**
    - A phase-locked beat clock follows the music without jumping or stepping back.
    - Pan/tilt run through a critically damped spring with a speed limit.
    - Intensity is limited per style by attack and release times.
-7. **Special moments**
+8. **Special moments**
    - Build-ups rise smoothly into known drops. Pop and dance styles get a short pre-drop gap and a drop impact.
    - Breakdowns go wide and soft.
    - When the music stops, the rig fades to an ambient brand-colour glow.
-8. **Strobe** is only used on drops and the last beat before a known drop, plus short peak hits for EDM. It is never used for ballads or ambient music, can be switched off, and never runs longer than 4 seconds.
+9. **Strobe** is only used on drops and the last beat before a known drop, plus short peak hits for EDM. It is never used for ballads or ambient music, can be switched off, and never runs longer than 4 seconds.
 
 ## Mood shows (slow → fast)
 
@@ -86,7 +100,7 @@ The goal is a show that looks programmed by a lighting designer, not an audio vi
 
 ## Setup
 
-1. Set the fixtures to the right modes. The Flex L7s should be in **16-channel (Basic)** mode and the Focus Hybrids in **19-channel** mode, with the addresses listed above.
+1. Set the fixtures to the right modes. The Flex L7s should be in **50-channel (Extended 7)** mode and the Focus Hybrids in **25-channel** mode, with the addresses listed above.
 2. On the **NodeGBx8**, set the DMX port you use to **sACN input** with universe 1, or another universe you choose.
 3. In the app, open **Settings → sACN Output**:
    - Enter the node's IP address. Unicast is the default.

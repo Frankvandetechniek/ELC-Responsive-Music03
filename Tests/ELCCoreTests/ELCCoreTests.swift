@@ -69,33 +69,58 @@ final class SACNTests: XCTestCase {
 final class FixtureTests: XCTestCase {
     func testDefaultPatch() {
         let rig = Rig.elcDefault()
-        XCTAssertEqual(rig.fixtures.map { $0.address }, [1, 17, 33, 49, 65, 81, 97, 116, 135, 154, 173, 192])
+        XCTAssertEqual(rig.fixtures.map { $0.address }, [1, 51, 101, 151, 201, 251, 301, 326, 351, 376, 401, 426])
+        XCTAssertEqual(rig.l7s.map { $0.kind.channelCount }, [50, 50, 50, 50, 50, 50])
+        XCTAssertEqual(rig.hybrids.map { $0.kind.channelCount }, [25, 25, 25, 25, 25, 25])
         XCTAssertTrue(rig.validate().isEmpty, "\(rig.validate())")
         XCTAssertEqual(rig.l7s.count, 6)
         XCTAssertEqual(rig.hybrids.count, 6)
     }
 
-    func testL7Encoding() {
+    func testOldSavedFixtureKindsStillDecode() throws {
+        let old = #"["ADJ Focus Flex L7 (16ch Basic)", "ADJ Focus Hybrid (19ch)"]"#.data(using: .utf8)!
+        XCTAssertEqual(try JSONDecoder().decode([FixtureKind].self, from: old), [.focusFlexL7, .focusHybrid])
+    }
+
+    /// ADJ Focus Flex L7 — DMX Traits, "Ext 7" (50 channel) column.
+    func testL7Extended7Encoding() {
         var s = FixtureState()
         s.intensity = 1
         s.color = RGB(1, 0, 0)
+        s.pixels = [RGB(1, 0, 0), RGB(0, 1, 0), RGB(0, 0, 1), RGB(0, 0, 0), RGB(1, 1, 1), RGB(0.5, 0, 0), RGB(0, 0, 1)]
         s.zoom = 1
         s.pan = 0; s.tilt = 0
         let fx = Rig.elcDefault().fixtures[0]
         let ch = FixtureEncoder.encode(s, patch: fx)
-        XCTAssertEqual(ch.count, 16)
-        XCTAssertEqual(ch[0], 128)          // pan 270/540
-        XCTAssertEqual(ch[1], 128)          // tilt 135/270 = straight up
-        XCTAssertEqual(ch[2], 255)          // red
-        XCTAssertEqual(ch[3], 0)
-        XCTAssertEqual(ch[8], 48)           // shutter open
-        XCTAssertEqual(ch[9], 255)          // dimmer
-        XCTAssertEqual(ch[10], 0)           // zoom wide
+        XCTAssertEqual(ch.count, 50)
+        // 1/2 pan + fine, 3/4 tilt + fine: home = centre of 540° / 270° (32768)
+        XCTAssertEqual(Int(ch[0]) << 8 | Int(ch[1]), 32768)
+        XCTAssertEqual(Int(ch[2]) << 8 | Int(ch[3]), 32768)
+        // 5-8 pixel 1 RGBL, 9-12 pixel 2, ..., 29-32 pixel 7
+        XCTAssertEqual(Array(ch[4..<8]), [255, 0, 0, 0])
+        XCTAssertEqual(Array(ch[8..<12]).prefix(3), [0, 255, 0])
+        XCTAssertEqual(Array(ch[12..<15]), [0, 0, 255])
+        XCTAssertEqual(Array(ch[16..<20]), [0, 0, 0, 0])          // pixel 4 (ch 17-20) off
+        XCTAssertEqual(Array(ch[20..<23]), [255, 255, 255])       // pixel 5 (ch 21-24) white
+        XCTAssertEqual(ch[24], 128)                 // pixel 6 (ch 25) red 50 %
+        XCTAssertEqual(Array(ch[28..<32]), [0, 0, 255, 0])
+        XCTAssertEqual(Array(ch[32..<38]), [0, 0, 0, 0, 0, 0])   // 33-38 CT / virtual wheels / macros off
+        XCTAssertEqual(ch[38], 48)                  // 39 shutter open
+        XCTAssertEqual(ch[39], 255); XCTAssertEqual(ch[40], 255) // 40/41 dimmer 16 bit
+        XCTAssertEqual(ch[41], 0); XCTAssertEqual(ch[42], 0)     // 42/43 zoom wide
+        XCTAssertEqual(ch[44], 30)                  // 45 dim curve linear
+        XCTAssertEqual(ch[45], 0)                   // 46 no internal program
+        XCTAssertEqual(ch[49], 0)                   // 50 no special function
         s.shutter = .strobe(1)
-        XCTAssertEqual(FixtureEncoder.encode(s, patch: fx)[8], 95)
+        XCTAssertEqual(FixtureEncoder.encode(s, patch: fx)[38], 95)
+        // Without per-pixel data all 7 pixels take the fixture colour.
+        s.pixels = nil
+        let solid = FixtureEncoder.encode(s, patch: fx)
+        for p in 0..<7 { XCTAssertEqual(solid[4 + p * 4], 255); XCTAssertEqual(solid[5 + p * 4], 0) }
     }
 
-    func testHybridEncoding() {
+    /// ADJ Focus Hybrid — DMX Traits, 25 channel column.
+    func testHybrid25Encoding() {
         var s = FixtureState()
         s.intensity = 0.5
         s.hybridColor = .magenta
@@ -104,16 +129,26 @@ final class FixtureTests: XCTestCase {
         s.prism = 1
         s.prismRotation = 0
         s.zoom = 0
+        s.frost = 1
+        s.tilt = 10
         let fx = Rig.elcDefault().fixtures[6]
         let ch = FixtureEncoder.encode(s, patch: fx)
-        XCTAssertEqual(ch.count, 19)
-        XCTAssertEqual(ch[2], 41)           // magenta slot
-        XCTAssertEqual(ch[3], 19)           // gobo 2 (15-23)
-        XCTAssertEqual(ch[4], 128)          // CW fastest
-        XCTAssertEqual(ch[6], 48)           // shutter open
-        XCTAssertEqual(ch[7], 128)          // dimmer 50%
-        XCTAssertEqual(ch[8], 128)          // prism 1 in
-        XCTAssertEqual(ch[15], 0)           // zoom narrow
+        XCTAssertEqual(ch.count, 25)
+        XCTAssertEqual(Int(ch[0]) << 8 | Int(ch[1]), 32768)       // 1/2 pan
+        XCTAssertGreaterThan(Int(ch[2]) << 8 | Int(ch[3]), 32768) // 3/4 tilt (forward)
+        XCTAssertEqual(ch[4], 41)           // 5 colour wheel: magenta
+        XCTAssertEqual(ch[5], 19)           // 6 gobo 2 (15-23)
+        XCTAssertEqual(ch[6], 128)          // 7 gobo rotation CW fastest
+        XCTAssertEqual(ch[7], 0)            // 8 static gobo open
+        XCTAssertEqual(ch[8], 48)           // 9 shutter open
+        XCTAssertEqual(Int(ch[9]) << 8 | Int(ch[10]), 32768) // 10/11 dimmer 50 %
+        XCTAssertEqual(ch[11], 128)         // 12 prism 1 in
+        XCTAssertEqual(ch[14], 0)           // 15 prism 2 out
+        XCTAssertEqual(ch[17], 128)         // 18 focus default 50 %
+        XCTAssertEqual(ch[18], 0); XCTAssertEqual(ch[19], 0) // 19/20 zoom narrow
+        XCTAssertEqual(ch[20], 255)         // 21 frost
+        XCTAssertEqual(ch[22], 30)          // 23 dim curve linear
+        XCTAssertEqual(ch[24], 0)           // 25 special: none
         XCTAssertEqual(HybridColor.nearest(to: .brandGreen), .green)
         XCTAssertEqual(HybridColor.nearest(to: .brandMagenta), .magenta)
         XCTAssertEqual(HybridColor.nearest(to: .brandPurple), .purple)
@@ -126,22 +161,27 @@ final class FixtureTests: XCTestCase {
         for fx in rig.fixtures { var s = FixtureState(); s.intensity = 1; states[fx.id] = s }
         let frames = FixtureEncoder.frames(rig: rig, states: states)
         let u = frames[1]!
-        XCTAssertEqual(u[9], 255)                 // L7 1 dimmer = ch 10
-        XCTAssertEqual(u[81 - 1 + 9], 255)        // L7 6 dimmer = ch 90
-        XCTAssertEqual(u[97 - 1 + 7], 255)        // Hybrid 1 dimmer = ch 104
-        XCTAssertEqual(u[192 - 1 + 7], 255)       // Hybrid 6 dimmer = ch 199
-        XCTAssertEqual(u[210], 0)                 // nothing patched after 210
+        XCTAssertEqual(u[1 - 1 + 39], 255)        // L7 1 dimmer = ch 40
+        XCTAssertEqual(u[251 - 1 + 39], 255)      // L7 6 dimmer = ch 290
+        XCTAssertEqual(u[301 - 1 + 9], 255)       // Hybrid 1 dimmer = ch 310
+        XCTAssertEqual(u[426 - 1 + 9], 255)       // Hybrid 6 dimmer = ch 435
+        XCTAssertEqual(u[450], 0)                 // nothing patched after 450
+    }
+
+    func testSixteenBitMovementIsSmooth() {
+        let c = FixtureCalibration()
+        // 0.1° steps that 8 bit (≈2.1°/step) could not show are visible in 16 bit.
+        let a = BeamGeometry.dmx16(pan: 10.0, tilt: 20, calibration: c).pan
+        let b = BeamGeometry.dmx16(pan: 10.1, tilt: 20, calibration: c).pan
+        XCTAssertGreaterThan(b, a)
     }
 
     func testWallSafety() {
         let c = FixtureCalibration(backLimitDeg: 0, forwardLimitDeg: 80)
-        // Tilting back is clamped to vertical.
         XCTAssertEqual(BeamGeometry.safeAim(pan: 0, tilt: -40, calibration: c).tilt, 0, accuracy: 1e-9)
-        // Panned round past 90 degrees and tilted forward = pointing at the wall: must be reduced.
         let a = BeamGeometry.safeAim(pan: 110, tilt: 40, calibration: c)
         let forward = sin(degToRad(a.tilt)) * cos(degToRad(a.pan))
         XCTAssertGreaterThanOrEqual(forward, -1e-9)
-        // Forward limit
         XCTAssertEqual(BeamGeometry.safeAim(pan: 0, tilt: 120, calibration: c).tilt, 80)
     }
 }

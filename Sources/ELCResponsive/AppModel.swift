@@ -40,12 +40,27 @@ struct PersistedConfig: Codable {
     var inputDeviceName: String? = nil
     var setlist: [SetlistTrack] = []
     var autoAdvance: Bool = true
+    /// Patch layout version: 2 = Flex L7 50ch (Extended 7) + Focus Hybrid 25ch.
+    var rigVersion: Int? = PersistedConfig.currentRigVersion
 
     static let defaultsKey = "ELCResponsive.config.v1"
+    static let currentRigVersion = 2
 
     static func load() -> PersistedConfig {
         guard let data = UserDefaults.standard.data(forKey: defaultsKey),
-              let c = try? JSONDecoder().decode(PersistedConfig.self, from: data) else { return PersistedConfig() }
+              var c = try? JSONDecoder().decode(PersistedConfig.self, from: data) else { return PersistedConfig() }
+        if c.rigVersion != currentRigVersion {
+            // Older patch (L7 16ch / Hybrid 19ch): move to the new channel modes and addresses,
+            // keeping the universe and each fixture's calibration.
+            var rig = Rig.elcDefault(universe: c.rig.fixtures.first?.universe ?? 1)
+            for i in rig.fixtures.indices {
+                if let old = c.rig.fixtures.first(where: { $0.id == rig.fixtures[i].id }) {
+                    rig.fixtures[i].calibration = old.calibration
+                }
+            }
+            c.rig = rig
+            c.rigVersion = currentRigVersion
+        }
         return c
     }
 
@@ -457,6 +472,7 @@ final class AppModel: ObservableObject {
         c.cid = cid
         c.setlist = setlist
         c.autoAdvance = autoAdvance
+        c.rigVersion = PersistedConfig.currentRigVersion
         c.inputDeviceName = inputDevices.first(where: { $0.id == selectedInputID })?.name
         c.save()
     }

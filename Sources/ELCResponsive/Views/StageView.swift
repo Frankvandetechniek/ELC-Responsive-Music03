@@ -86,8 +86,18 @@ struct StageView: View {
                 for k in 0..<7 {
                     let cx = r.minX + rw * (CGFloat(k) + 0.5) / 7
                     let d = rh * 0.55
+                    // Each of the 7 RGB+Lime pixels shows its own colour (50ch Extended 7 mode).
+                    let pixelColor: Color
+                    if let px = s.pixels, k < px.count {
+                        let c = px[k]
+                        let m = max(c.r, c.g, c.b, 0.001)
+                        let level = s.intensity * min(1, m)
+                        pixelColor = level > 0.01 ? Theme.color(c.scaled(1 / m)).opacity(0.25 + 0.75 * level) : Color(white: 0.25)
+                    } else {
+                        pixelColor = s.intensity > 0.01 ? lit : Color(white: 0.25)
+                    }
                     ctx.fill(Path(ellipseIn: CGRect(x: cx - d / 2, y: p.y - d / 2, width: d, height: d)),
-                             with: .color(s.intensity > 0.01 ? lit : Color(white: 0.25)))
+                             with: .color(pixelColor))
                 }
                 ctx.stroke(Path(roundedRect: r, cornerRadius: rh / 2), with: .color(strobe ? .white : Color(white: 0.35)),
                            lineWidth: strobe ? 2 : 1)

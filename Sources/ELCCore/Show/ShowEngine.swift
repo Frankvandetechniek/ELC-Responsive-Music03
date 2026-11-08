@@ -185,6 +185,7 @@ public final class ShowEngine: @unchecked Sendable {
         var pan = 0.0, tilt = 0.0, vPan = 0.0, vTilt = 0.0
         var intensity = 0.0
         var color = RGB.black
+        var pixels: [RGB]? = nil
     }
 
     /// Number of cue changes so far (diagnostics / tests).
@@ -408,7 +409,11 @@ public final class ShowEngine: @unchecked Sendable {
             guard var s = out[fx.id] else { continue }
             s.shutter = (strobeWanted && staticBlend < 0.5 && idleBlend < 0.5) ? .strobe(settings.strobeMaxRate) : .open
             if gap && staticBlend < 0.5 { s.intensity = 0 }
-            if flashHeld { s.intensity = 1; s.color = s.color.mix(.white, 0.4) }
+            if flashHeld {
+                s.intensity = 1
+                s.color = s.color.mix(.white, 0.4)
+                s.pixels = s.pixels.map { $0.map { _ in s.color } }
+            }
             s.intensity = clamp(s.intensity * settings.masterDimmer, 0, 1)
             if blackout { s.intensity = 0 }
             if !settings.useGobos { s.gobo = 0; s.staticGobo = 0 }
@@ -749,6 +754,15 @@ public final class ShowEngine: @unchecked Sendable {
         n.l7Zoom = clamp(n.l7Zoom, pool.l7Zoom.lowerBound, pool.l7Zoom.upperBound)
         n.hybridZoom = clamp(n.hybridZoom, pool.hybridZoom.lowerBound, pool.hybridZoom.upperBound)
         n.snare = currentSnare
+        // L7 pixel layer: only one moving layer at a time — a chase across the bars gets static
+        // pixels, a steady/pulsing bar may get a moving pixel effect inside it.
+        let movingIntensity: Set<IntensityPattern> = [.chase, .bounce, .wave, .breathe, .snareChase, .centerOut]
+        var pixelOptions = pool.l7Pixels
+        if movingIntensity.contains(n.l7Intensity) { pixelOptions = pixelOptions.filter { !$0.isMoving } }
+        if pixelOptions.isEmpty { pixelOptions = [.solid] }
+        if full || aspects.contains(0) || aspects.contains(1) || !pixelOptions.contains(n.l7Pixels) {
+            n.l7Pixels = pick(pixelOptions, avoiding: l.l7Pixels)
+        }
         // Energy / dynamics of the look follow the song's drive.
         let d = mode == .audio ? drive : (personality.style == .edm ? 0.9 : 0.5)
         n.drive = d
@@ -792,6 +806,8 @@ public final class ShowEngine: @unchecked Sendable {
                                             rate: c.chaseRate, cycle: c.moveCycleBeats, x: x, snare: c.snare)
             let depth = c.l7Intensity.isSnare ? max(c.depth, 0.65) : c.depth
             s.intensity = clamp((c.level * (1 - depth + depth * pat) + (c.l7Intensity.isSnare ? 0 : accent)) * l7Scale, 0, 1)
+            s.pixels = PatternMath.l7Pixels(c.l7Pixels, palette: c.palette, colour: s.color, bar: i, bars: n,
+                                            beat: fxBeat, barBeat: barBeat, cycle: c.moveCycleBeats)
             let aim = PatternMath.l7Aim(c.l7Move, beat: fxBeat, index: i, x: x, cycle: c.moveCycleBeats, amount: amount)
             s.pan = aim.0; s.tilt = aim.1
             s.zoom = c.l7Zoom
@@ -834,6 +850,13 @@ public final class ShowEngine: @unchecked Sendable {
                 let target = (0.45 + 0.35 * p) + (0.2 + 0.15 * p) * riser
                 s.intensity = lerp(s.intensity, target, smoothstep(p * 1.5))
                 s.color = s.color.mix(look.palette.accent, p * 0.6)
+                // The bars "charge up": pixels light from each bar's centre outwards as the build progresses.
+                let base = s.color
+                s.pixels = (0..<7).map { px in
+                    let d = abs(Double(px) - 3) / 3
+                    let lit = PatternMath.window(max(0, d - p * 1.1), 0.25)
+                    return base.scaled(0.1 + 0.9 * lit)
+                }
                 s.pan = lerp(s.pan, x * 28, p * 0.8)
                 s.tilt = lerp(s.tilt, 8, p * 0.8)
                 s.zoom = lerp(s.zoom, 0, p)
@@ -856,7 +879,10 @@ public final class ShowEngine: @unchecked Sendable {
             for fx in rig.fixtures {
                 guard var s = out[fx.id] else { continue }
                 s.intensity = max(s.intensity, e)
-                if fx.kind == .focusFlexL7 { s.color = s.color.mix(.white, e * 0.5) }
+                if fx.kind == .focusFlexL7 {
+                    s.color = s.color.mix(.white, e * 0.5)
+                    s.pixels = s.pixels.map { $0.map { px in px.mix(s.color, e) } }
+                }
                 out[fx.id] = s
             }
         }
@@ -876,6 +902,11 @@ public final class ShowEngine: @unchecked Sendable {
             o.zoom = lerp(sa.zoom, sb.zoom, e)
             o.frost = lerp(sa.frost, sb.frost, e)
             o.color = sa.color.mix(sb.color, e)
+            if sa.pixels != nil || sb.pixels != nil {
+                let pa = sa.pixels ?? Array(repeating: sa.color, count: 7)
+                let pb = sb.pixels ?? Array(repeating: sb.color, count: 7)
+                o.pixels = zip(pa, pb).map { $0.mix($1, e) }
+            }
             o.goboRotation = lerp(sa.goboRotation, sb.goboRotation, e)
             o.prismRotation = lerp(sa.prismRotation, sb.prismRotation, e)
             let discreteDiffers = fx.kind == .focusHybrid &&
@@ -938,6 +969,7 @@ public final class ShowEngine: @unchecked Sendable {
             if settings.idleBehaviour == .ambientGlow {
                 let c: RGB = fx.id % 2 == 0 ? .brandGreen : .brandMagenta
                 s.color = c
+                s.pixels = nil
                 s.hybridColor = HybridColor.nearest(to: c)
                 s.intensity = settings.idleLevel * (0.7 + 0.3 * sin(now * 0.35 + Double(fx.id) * 0.5))
                 if fx.kind == .focusHybrid { s.frost = 0.7; s.gobo = 0; s.prism = 0 }
@@ -973,7 +1005,14 @@ public final class ShowEngine: @unchecked Sendable {
             let down = fast ? dt / 0.05 : dt / max(release, 0.02)
             let d = s.intensity - p.intensity
             p.intensity += d > 0 ? min(d, up) : max(d, -down)
-            p.color = p.color.mix(s.color, fast ? 1 : 1 - exp(-dt / 0.08))
+            let k = fast ? 1 : 1 - exp(-dt / 0.08)
+            p.color = p.color.mix(s.color, k)
+            if fx.kind == .focusFlexL7 {
+                let target = s.pixels ?? Array(repeating: s.color, count: 7)
+                let cur = p.pixels ?? target
+                p.pixels = zip(cur, target).map { $0.mix($1, k) }
+                s.pixels = p.pixels
+            }
             post[fx.id] = p
             let aim = BeamGeometry.safeAim(pan: p.pan, tilt: p.tilt, calibration: fx.calibration)
             s.pan = aim.pan; s.tilt = aim.tilt

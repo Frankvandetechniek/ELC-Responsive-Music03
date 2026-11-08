@@ -55,7 +55,7 @@ struct OutputSettingsView: View {
                 2. Give the Mac an IP in the same range as the node (factory default nodes are usually in the 2.x.x.x or 10.x.x.x range; check the node's display/web page).
                 3. In the node's web interface (or front panel), set the desired DMX port to **sACN input**, universe **\(rigUniverse.wrappedValue)**.
                 4. Enter the node's IP above (unicast is the most reliable) — or choose multicast if the node is configured to listen on 239.255.0.\(rigUniverse.wrappedValue).
-                5. The fixtures expect: Flex L7 in **16 channel (Basic)** mode, Focus Hybrid in **19 channel** mode.
+                5. The fixtures expect: Flex L7 in **50 channel (Extended 7)** mode at 1, 51, 101, 151, 201, 251 and Focus Hybrid in **25 channel** mode at 301, 326, 351, 376, 401, 426.
                 """)
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
@@ -290,7 +290,8 @@ struct DMXMonitorView: View {
                 }
                 .frame(width: 200)
                 Spacer()
-                Text("Patched: 1–210").font(.caption).foregroundStyle(.secondary)
+                Text("Patched: 1–\(model.rig.fixtures.filter { $0.universe == universe }.map { $0.address + $0.kind.channelCount - 1 }.max() ?? 0)")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             ScrollView {
                 let data = model.frames[universe] ?? [UInt8](repeating: 0, count: 512)

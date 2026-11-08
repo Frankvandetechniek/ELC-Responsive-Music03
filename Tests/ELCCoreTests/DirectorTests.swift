@@ -127,3 +127,64 @@ final class DirectorTests: XCTestCase {
         if e.look.featured == .l7 { XCTAssertGreaterThan(l7, hy * 1.4) } else { XCTAssertGreaterThan(hy, l7 * 1.4) }
     }
 }
+
+final class PixelTests: XCTestCase {
+    let dt = 1.0 / 44
+
+    /// "Effects are a continuation of the look": never a chase across the bars *and* a moving pixel effect.
+    func testOnlyOneMovingLayerOnTheL7s() {
+        let moving: Set<IntensityPattern> = [.chase, .bounce, .wave, .breathe, .snareChase, .centerOut]
+        var sawMovingPixels = false
+        for seed in 1...40 {
+            for style in [MusicStyle.edm, .pop, .house] {
+                var song = SongTimeline(); song.style = style
+                let e = ShowEngine(rig: Rig.elcDefault(), seed: UInt64(seed))
+                e.mode = .audio
+                e.settings.styleOverride = style
+                var t = 0.0
+                while t * song.bpm / 60 < 70 {
+                    t += dt
+                    _ = e.tick(music: song.state(at: t), now: t, dt: dt)
+                    if moving.contains(e.look.l7Intensity) { XCTAssertFalse(e.look.l7Pixels.isMoving, "\(e.look.summary) + \(e.look.l7Pixels)") }
+                    if e.look.l7Pixels.isMoving { sawMovingPixels = true }
+                }
+            }
+        }
+        XCTAssertTrue(sawMovingPixels, "pixel effects are never used")
+    }
+
+    /// During a build-up the L7 bars fill from their centre outwards.
+    func testBuildUpChargesBarsFromCentre() {
+        let e = ShowEngine(rig: Rig.elcDefault(), seed: 2)
+        e.mode = .audio
+        e.settings.styleOverride = .edm
+        var t = 0.0
+        var early: [RGB]? = nil, late: [RGB]? = nil
+        let l7 = Rig.elcDefault().l7s[2].id
+        while t < 45 {
+            t += dt
+            var m = MusicState()
+            m.source = .track; m.isSilent = false; m.timestamp = t; m.bpm = 128; m.beatPosition = t * 128 / 60
+            m.trackProgress = t / 60; m.tempoConfidence = 1
+            if m.beatPosition < 32 { m.section = .groove; m.nextSection = .build; m.beatsToNextSection = 32 - m.beatPosition; m.sectionEnergy = 0.5 }
+            else { m.section = .build; m.sectionStartBeat = 32; m.nextSection = .drop; m.beatsToNextSection = 96 - m.beatPosition; m.sectionEnergy = 0.5 }
+            let out = e.tick(music: m, now: t, dt: dt)
+            if early == nil && m.beatPosition >= 70 { early = out[l7]!.pixels }
+            if late == nil && m.beatPosition >= 93 { late = out[l7]!.pixels }
+        }
+        func bright(_ c: RGB) -> Double { max(c.r, c.g, c.b) }
+        let a = try! XCTUnwrap(early), b = try! XCTUnwrap(late)
+        XCTAssertGreaterThan(bright(a[3]), bright(a[0]) * 2, "centre lit before the edges")
+        XCTAssertGreaterThan(bright(b[0]), bright(a[0]) * 2, "edges fill up as the build progresses")
+    }
+
+    func testPixelsReachTheDMXOutput() {
+        var s = FixtureState()
+        s.intensity = 1
+        s.pixels = PatternMath.l7Pixels(.split, palette: .brand, colour: .white, bar: 0, bars: 6, beat: 0, barBeat: 0, cycle: 8)
+        let ch = FixtureEncoder.encode(s, patch: Rig.elcDefault().l7s[0])
+        // pixel 1 = brand green (G high, R low), pixel 7 = brand magenta (R high, G low)
+        XCTAssertGreaterThan(ch[5], 200); XCTAssertLessThan(ch[4], 30)
+        XCTAssertGreaterThan(ch[28], 200); XCTAssertLessThan(ch[29], 30)
+    }
+}

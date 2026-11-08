@@ -60,7 +60,7 @@ public struct LightingPersonality: Sendable {
         hybridIntensity: [.steady, .breathe],
         hybridMove: [.vUp, .fan, .tiltWave],
         cycleBeats: [32, 64], chaseRates: [0.25],
-        l7Zoom: 0.65...1.0, hybridZoom: 0.55...0.9, level: 0.7, depth: 0.25)
+        l7Zoom: 0.65...1.0, hybridZoom: 0.55...0.9, level: 0.7, depth: 0.25, pixels: [.solid, .split, .gradient, .lineGradient])
 
     static let grooveBase = LookPool(
         l7Color: [.split, .halves, .gradient, .roll, .centerOut, .alternateBar],
@@ -71,7 +71,8 @@ public struct LightingPersonality: Sendable {
         hybridIntensity: [.steady, .wave, .alternate],
         hybridMove: [.circle, .figure8, .tiltWave, .sweep, .cross, .fan],
         cycleBeats: [16, 32], chaseRates: [0.5, 1],
-        l7Zoom: 0.35...0.7, hybridZoom: 0.15...0.45, level: 0.85, depth: 0.35)
+        l7Zoom: 0.35...0.7, hybridZoom: 0.15...0.45, level: 0.85, depth: 0.35,
+        pixels: [.solid, .split, .gradient, .lineGradient, .wave])
 
     static let highBase = LookPool(
         l7Color: [.split, .alternateBar, .halves, .centerOut, .gradient],
@@ -82,7 +83,8 @@ public struct LightingPersonality: Sendable {
         hybridIntensity: [.steady, .pulse, .chase, .alternate],
         hybridMove: [.circle, .figure8, .ballyhoo, .sweep, .cross],
         cycleBeats: [8, 16], chaseRates: [1],
-        l7Zoom: 0.1...0.4, hybridZoom: 0.0...0.25, level: 1.0, depth: 0.45)
+        l7Zoom: 0.1...0.4, hybridZoom: 0.0...0.25, level: 1.0, depth: 0.45,
+        pixels: [.solid, .split, .wave, .travel, .centerPulse])
 
     static func tweak(_ p: LookPool, _ f: (inout LookPool) -> Void) -> LookPool { var c = p; f(&c); return c }
 
@@ -158,7 +160,8 @@ public struct LightingPersonality: Sendable {
                      $0.l7Color = [.alternateBar, .split, .halves, .centerOut]
                      $0.hybridIntensity = [.pulse, .steady, .chase, .snareHit]
                      $0.hybridMove = [.ballyhoo, .circle, .figure8, .sweep, .cross, .fan]
-                     $0.hybridBeam = [.beam, .prism, .linearPrism, .goboPrism] }],
+                     $0.hybridBeam = [.beam, .prism, .linearPrism, .goboPrism]
+                     $0.l7Pixels = [.travel, .centerPulse, .wave, .split] }],
         phraseBars: 8, fadeBeats: 1, attack: 0.04, release: 0.25, springHz: 1.6, maxSpeed: 170,
         movementSize: 1.15, accent: .downbeat, accentAmount: 0.25, halfTime: false, strobe: .peaks,
         dropImpact: true, colorFadeBeats: 0.25)

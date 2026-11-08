@@ -1,14 +1,26 @@
 import Foundation
 
 public enum FixtureKind: String, Codable, CaseIterable, Sendable {
-    case focusFlexL7 = "ADJ Focus Flex L7 (16ch Basic)"
-    case focusHybrid = "ADJ Focus Hybrid (19ch)"
+    case focusFlexL7 = "ADJ Focus Flex L7 (50ch Extended 7)"
+    case focusHybrid = "ADJ Focus Hybrid (25ch)"
 
     public var channelCount: Int {
         switch self {
-        case .focusFlexL7: return 16
-        case .focusHybrid: return 19
+        case .focusFlexL7: return 50
+        case .focusHybrid: return 25
         }
+    }
+
+    /// Number of individually controllable pixels (L7: 7 RGB+Lime cells).
+    public var pixelCount: Int { self == .focusFlexL7 ? 7 : 1 }
+
+    /// Tolerant decoding: configurations saved with older channel modes map onto the current kinds.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        if let k = FixtureKind(rawValue: raw) { self = k }
+        else if raw.contains("L7") { self = .focusFlexL7 }
+        else if raw.contains("Hybrid") { self = .focusHybrid }
+        else { throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown fixture \(raw)")) }
     }
 
     public var shortName: String {
@@ -53,6 +65,9 @@ public struct FixtureState: Equatable, Sendable {
     public var tilt: Double = 30              // degrees from vertical, + = toward the audience, - = toward LED wall
     public var zoom: Double = 0.5             // 0 = narrow, 1 = wide
     public var shutter: Shutter = .open
+    /// L7 only: per-pixel colour (7 cells, left → right as seen on the plot). `nil` = all pixels `color`.
+    /// Pixel colours carry their own brightness; the fixture dimmer (`intensity`) scales all of them.
+    public var pixels: [RGB]? = nil
     // Hybrid only
     public var gobo: Int = 0                  // rotating gobo 0 = open, 1...8
     public var goboShake: Double? = nil       // shake speed 0...1 for the selected rotating gobo
@@ -133,13 +148,13 @@ public struct Rig: Codable, Equatable, Sendable {
         let l7X: [Double] = [300, 500, 710, 1000, 1200, 1400]
         for i in 0..<6 {
             f.append(FixturePatch(id: i + 1, name: "L7 \(i + 1)", kind: .focusFlexL7, universe: universe,
-                                  address: 1 + 16 * i, plotX: l7X[i] / 1704, plotY: 192 / 1004,
+                                  address: 1 + 50 * i, plotX: l7X[i] / 1704, plotY: 192 / 1004,
                                   calibration: FixtureCalibration(backLimitDeg: 0, forwardLimitDeg: 80)))
         }
         let hyb: [(Double, Double)] = [(620, 400), (1100, 400), (400, 607), (1310, 605), (205, 812), (1525, 815)]
         for i in 0..<6 {
             f.append(FixturePatch(id: 7 + i, name: "Hybrid \(i + 1)", kind: .focusHybrid, universe: universe,
-                                  address: 97 + 19 * i, plotX: hyb[i].0 / 1704, plotY: hyb[i].1 / 1004,
+                                  address: 301 + 25 * i, plotX: hyb[i].0 / 1704, plotY: hyb[i].1 / 1004,
                                   calibration: FixtureCalibration(backLimitDeg: 5, forwardLimitDeg: 80)))
         }
         return Rig(fixtures: f)
@@ -183,6 +198,14 @@ public enum BeamGeometry {
         return (p, t)
     }
 
+    /// Converts a safe abstract aim into 16 bit DMX pan / tilt values (coarse, fine).
+    public static func dmx16(pan: Double, tilt: Double, calibration c: FixtureCalibration) -> (pan: UInt16, tilt: UInt16) {
+        let aim = safeAim(pan: pan, tilt: tilt, calibration: c)
+        let panDeg = c.panHomeDeg + (c.panInvert ? -aim.pan : aim.pan)
+        let tiltDeg = c.tiltUpDeg + (c.tiltInvert ? -aim.tilt : aim.tilt)
+        return (toWord(clamp(panDeg / c.panRangeDeg, 0, 1)), toWord(clamp(tiltDeg / c.tiltRangeDeg, 0, 1)))
+    }
+
     /// Converts a safe abstract aim into 8 bit DMX pan / tilt values.
     public static func dmx(pan: Double, tilt: Double, calibration c: FixtureCalibration) -> (pan: UInt8, tilt: UInt8) {
         let aim = safeAim(pan: pan, tilt: tilt, calibration: c)
@@ -205,79 +228,96 @@ public enum FixtureEncoder {
         }
     }
 
-    /// ADJ Focus Flex L7, 16 channel "Basic" mode.
-    static func encodeL7(_ s: FixtureState, _ c: FixtureCalibration) -> [UInt8] {
-        var ch = [UInt8](repeating: 0, count: 16)
-        let pt = BeamGeometry.dmx(pan: s.pan, tilt: s.tilt, calibration: c)
-        ch[0] = pt.pan                                   // 1  Pan
-        ch[1] = pt.tilt                                  // 2  Tilt
-        // RGB + Lime: route the yellow/green part of the colour into the lime emitter.
-        let r = clamp(s.color.r, 0, 1), g = clamp(s.color.g, 0, 1), b = clamp(s.color.b, 0, 1)
+    @inline(__always) static func put16(_ ch: inout [UInt8], _ index: Int, _ v: UInt16) {
+        ch[index] = UInt8(v >> 8)
+        ch[index + 1] = UInt8(v & 0xFF)
+    }
+
+    /// RGB → (R, G, B, Lime): the yellow/green part of the colour also drives the lime emitter.
+    @inline(__always) static func rgbl(_ c: RGB) -> (UInt8, UInt8, UInt8, UInt8) {
+        let r = clamp(c.r, 0, 1), g = clamp(c.g, 0, 1), b = clamp(c.b, 0, 1)
         let lime = clamp(min(r, g) * 0.8 + max(0, g - r - b) * 0.25, 0, 1)
-        ch[2] = toByte(r)                                // 3  Red
-        ch[3] = toByte(g)                                // 4  Green
-        ch[4] = toByte(b)                                // 5  Blue
-        ch[5] = toByte(lime)                             // 6  Lime
-        ch[6] = 0                                        // 7  CT presets: no function
-        ch[7] = 0                                        // 8  Colour macros: off
-        ch[8] = s.intensity > 0 ? s.shutter.dmx : 0      // 9  Shutter / strobe
-        ch[9] = toByte(s.intensity)                      // 10 Dimmer
-        ch[10] = toByte(1 - clamp(s.zoom, 0, 1))         // 11 Zoom (wide -> narrow)
-        ch[11] = 0                                       // 12 Internal programs: none
-        ch[12] = 0                                       // 13 Program speed
-        ch[13] = 0                                       // 14 Program fade
-        ch[14] = toByte(clamp(s.moveSmoothing, 0, 1) * 0.6) // 15 Pan/tilt speed (max -> min)
-        ch[15] = 0                                       // 16 Special functions: none
+        return (toByte(r), toByte(g), toByte(b), toByte(lime))
+    }
+
+    /// ADJ Focus Flex L7, 50 channel "Extended 7" mode (7 RGB+Lime pixels, 16 bit pan/tilt/dimmer/zoom).
+    static func encodeL7(_ s: FixtureState, _ c: FixtureCalibration) -> [UInt8] {
+        var ch = [UInt8](repeating: 0, count: 50)
+        let pt = BeamGeometry.dmx16(pan: s.pan, tilt: s.tilt, calibration: c)
+        put16(&ch, 0, pt.pan)                            // 1/2   Pan, pan fine
+        put16(&ch, 2, pt.tilt)                           // 3/4   Tilt, tilt fine
+        for p in 0..<7 {                                 // 5-32  Pixel 1-7: R, G, B, Lime
+            let col = s.pixels.map { $0.indices.contains(p) ? $0[p] : s.color } ?? s.color
+            let v = rgbl(col)
+            ch[4 + p * 4] = v.0; ch[5 + p * 4] = v.1; ch[6 + p * 4] = v.2; ch[7 + p * 4] = v.3
+        }
+        ch[32] = 0                                       // 33    Colour temperature linear: off
+        ch[33] = 0                                       // 34    CT presets: no function
+        ch[34] = 0                                       // 35    Virtual foreground wheel: open
+        ch[35] = 0                                       // 36    Virtual background wheel: open
+        ch[36] = 0                                       // 37    CT red → green: no function
+        ch[37] = 0                                       // 38    Colour macros: off
+        ch[38] = s.intensity > 0 ? s.shutter.dmx : 0     // 39    Shutter / strobe
+        put16(&ch, 39, toWord(s.intensity))              // 40/41 Dimmer, dimmer fine
+        put16(&ch, 41, toWord(1 - clamp(s.zoom, 0, 1)))  // 42/43 Zoom (wide → narrow), fine
+        ch[43] = 0                                       // 44    Dim mode: unit setting
+        ch[44] = 30                                      // 45    Dim curve: linear (the engine shapes its own fades)
+        ch[45] = 0                                       // 46    Internal programs: none
+        ch[46] = 0                                       // 47    Program speed
+        ch[47] = 0                                       // 48    Program fade
+        ch[48] = toByte(clamp(s.moveSmoothing, 0, 1) * 0.6) // 49 Pan/tilt speed (max → min)
+        ch[49] = 0                                       // 50    Special functions: none
         return ch
     }
 
-    /// ADJ Focus Hybrid, 19 channel mode.
+    /// ADJ Focus Hybrid, 25 channel mode (16 bit pan/tilt, dimmer fine, zoom fine).
     static func encodeHybrid(_ s: FixtureState, _ c: FixtureCalibration) -> [UInt8] {
-        var ch = [UInt8](repeating: 0, count: 19)
-        let pt = BeamGeometry.dmx(pan: s.pan, tilt: s.tilt, calibration: c)
-        ch[0] = pt.pan                                    // 1  Pan
-        ch[1] = pt.tilt                                   // 2  Tilt
-        ch[2] = (s.hybridColor ?? HybridColor.nearest(to: s.color)).dmx // 3 Colour wheel
-        // 4 Rotating gobo wheel
+        var ch = [UInt8](repeating: 0, count: 25)
+        let pt = BeamGeometry.dmx16(pan: s.pan, tilt: s.tilt, calibration: c)
+        put16(&ch, 0, pt.pan)                             // 1/2  Pan, pan fine
+        put16(&ch, 2, pt.tilt)                            // 3/4  Tilt, tilt fine
+        ch[4] = (s.hybridColor ?? HybridColor.nearest(to: s.color)).dmx // 5 Colour wheel
+        // 6 Rotating gobo wheel
         let g = clamp(s.gobo, 0, 8)
         if g == 0 {
-            ch[3] = 0
+            ch[5] = 0
         } else if let shake = s.goboShake {
-            ch[3] = UInt8(78 + 14 * (g - 1) + Int((clamp(shake, 0, 1) * 13).rounded()))
+            ch[5] = UInt8(78 + 14 * (g - 1) + Int((clamp(shake, 0, 1) * 13).rounded()))
         } else {
-            ch[3] = UInt8(6 + 9 * (g - 1) + 4)
+            ch[5] = UInt8(6 + 9 * (g - 1) + 4)
         }
-        // 5 Gobo rotation: 128-189 CW fast->slow, 190-192 stop, 193-255 CCW slow->fast
+        // 7 Gobo rotation: 128-189 CW fast->slow, 190-192 stop, 193-255 CCW slow->fast
         let gr = clamp(s.goboRotation, -1, 1)
         if g == 0 || abs(gr) < 0.02 {
-            ch[4] = 191
+            ch[6] = 191
         } else if gr > 0 {
-            ch[4] = UInt8(189 - Int((gr * 61).rounded()))
+            ch[6] = UInt8(189 - Int((gr * 61).rounded()))
         } else {
-            ch[4] = UInt8(193 + Int((-gr * 62).rounded()))
+            ch[6] = UInt8(193 + Int((-gr * 62).rounded()))
         }
-        // 6 Static gobo wheel
+        // 8 Static gobo wheel
         let sg = clamp(s.staticGobo, 0, 15)
-        ch[5] = sg == 0 ? 0 : UInt8(10 + 4 * (sg - 1) + 2)
-        ch[6] = s.intensity > 0 ? s.shutter.dmx : 0       // 7 Shutter / strobe
-        ch[7] = toByte(s.intensity)                       // 8 Dimmer
-        // 9/10 Prism 1 (8 facet circular) + rotation, 12/13 Prism 2 (6 facet linear) + rotation
+        ch[7] = sg == 0 ? 0 : UInt8(10 + 4 * (sg - 1) + 2)
+        ch[8] = s.intensity > 0 ? s.shutter.dmx : 0       // 9 Shutter / strobe
+        put16(&ch, 9, toWord(s.intensity))                // 10/11 Dimmer, dimmer fine
         func prismRot(_ v: Double) -> UInt8 {
             let r = clamp(v, -1, 1)
             if abs(r) < 0.02 { return 0 }
             return r > 0 ? UInt8(191 - Int((r * 62).rounded())) : UInt8(193 + Int((-r * 62).rounded()))
         }
-        ch[8] = s.prism == 1 ? 128 : 0
-        ch[9] = s.prism == 1 ? prismRot(s.prismRotation) : 0
-        ch[10] = 0                                        // 11 Prism 1 / gobo macros: off
-        ch[11] = s.prism == 2 ? 128 : 0
-        ch[12] = s.prism == 2 ? prismRot(s.prismRotation) : 0
-        ch[13] = 0                                        // 14 Prism 2 / gobo macros: off
-        ch[14] = toByte(s.focus ?? c.focus)               // 15 Focus
-        ch[15] = toByte(clamp(s.zoom, 0, 1))              // 16 Zoom (narrow -> wide)
-        ch[16] = toByte(clamp(s.frost, 0, 1))             // 17 Frost
-        ch[17] = UInt8(Int((clamp(s.moveSmoothing, 0, 1) * 150).rounded())) // 18 Pan/tilt speed (fast -> slow)
-        ch[18] = 0                                        // 19 Special functions: none
+        ch[11] = s.prism == 1 ? 128 : 0                   // 12 Prism 1 (8 facet circular)
+        ch[12] = s.prism == 1 ? prismRot(s.prismRotation) : 0 // 13 Prism 1 index / rotation
+        ch[13] = 0                                        // 14 Prism 1 / gobo macros: off
+        ch[14] = s.prism == 2 ? 128 : 0                   // 15 Prism 2 (6 facet linear)
+        ch[15] = s.prism == 2 ? prismRot(s.prismRotation) : 0 // 16 Prism 2 index / rotation
+        ch[16] = 0                                        // 17 Prism 2 / gobo macros: off
+        ch[17] = toByte(s.focus ?? c.focus)               // 18 Focus
+        put16(&ch, 18, toWord(clamp(s.zoom, 0, 1)))       // 19/20 Zoom (narrow → wide), fine
+        ch[20] = toByte(clamp(s.frost, 0, 1))             // 21 Frost
+        ch[21] = 0                                        // 22 Dimmer mode: unit setting
+        ch[22] = 30                                       // 23 Dim curve: linear
+        ch[23] = UInt8(Int((clamp(s.moveSmoothing, 0, 1) * 150).rounded())) // 24 Pan/tilt speed (fast -> slow)
+        ch[24] = 0                                        // 25 Special functions: none
         return ch
     }
 

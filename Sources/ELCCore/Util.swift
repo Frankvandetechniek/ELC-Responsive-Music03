@@ -23,6 +23,11 @@ import Foundation
     UInt8(clamp((v * 255).rounded(), 0, 255))
 }
 
+/// 0...1 → 16 bit DMX value (coarse/fine pair).
+@inline(__always) public func toWord(_ v: Double) -> UInt16 {
+    UInt16(clamp((v * 65535).rounded(), 0, 65535))
+}
+
 @inline(__always) public func degToRad(_ d: Double) -> Double { d * .pi / 180 }
 @inline(__always) public func radToDeg(_ r: Double) -> Double { r * 180 / .pi }
 
