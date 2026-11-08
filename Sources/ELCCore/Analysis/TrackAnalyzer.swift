@@ -13,7 +13,7 @@ public struct TrackSection: Codable, Equatable, Sendable {
 
 /// Result of analysing a complete audio file. Cached next to the setlist.
 public struct TrackAnalysis: Codable, Equatable, Sendable {
-    public static let currentVersion = 5
+    public static let currentVersion = 6
     public var version: Int = TrackAnalysis.currentVersion
     public var duration: Double
     public var bpm: Double
@@ -45,6 +45,9 @@ public struct TrackAnalysis: Codable, Equatable, Sendable {
 }
 
 public enum TrackAnalyzer {
+    /// Delay between a transient and its onset-envelope peak (calibrated on click tracks).
+    public static let onsetDelay = 0.015
+
     /// Analyses a full mono signal. Runs in roughly 1-3 s for a typical 4 minute track.
     public static func analyze(samples: [Float], sampleRate: Double,
                                progress: ((Double) -> Void)? = nil) -> TrackAnalysis {
@@ -101,7 +104,8 @@ public enum TrackAnalyzer {
         progress?(0.8)
 
         let beatFrames = TempoEstimator.trackBeats(onsets: onsets, fps: fps, bpm: bpm)
-        var beatTimes = beatFrames.map { frames[min($0, frames.count - 1)].time - hopOffset }
+        // Onset-envelope peaks trail the actual transient by the analysis window delay (measured ≈ 15 ms).
+        var beatTimes = beatFrames.map { frames[min($0, frames.count - 1)].time - hopOffset - TrackAnalyzer.onsetDelay }
         // Make the grid strictly increasing.
         beatTimes = beatTimes.enumerated().filter { $0.offset == 0 || $0.element > beatTimes[$0.offset - 1] + 0.1 }.map { $0.element }
         if beatTimes.count >= 8 {

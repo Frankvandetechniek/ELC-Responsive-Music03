@@ -134,6 +134,10 @@ public final class LiveAnalyzer: @unchecked Sendable {
     private var onsetHistory: [Double] = []
     private let historyLength: Int
     private var tempoTimer = 0.0
+    private var phaseTimer = 0.0
+    /// Measured delay between a transient and the onset-envelope peak it causes (analysis window), in seconds.
+    static let onsetDelay = LiveAnalyzer.defaultOnsetDelay
+    public static let defaultOnsetDelay = 0.017
     private var bpm = 120.0
     private var tempoConfidence = 0.0
     private var candidateBPM = 0.0
@@ -229,22 +233,13 @@ public final class LiveAnalyzer: @unchecked Sendable {
             updateTempo()
         }
 
-        // --- beat phase (PLL)
+        // --- beat phase: comb correlation over the recent onsets (can't lose lock like a peak PLL)
         beatPos += dt * bpm / 60
-        oMean = smoothTowards(oMean, f.onset, dt: dt, timeConstant: 1.0)
-        let dev = f.onset - oMean
-        oVar = smoothTowards(oVar, dev * dev, dt: dt, timeConstant: 1.0)
-        let std = max(oVar.squareRoot(), 1e-6)
-        if oPrev1 > oPrev2 && oPrev1 >= f.onset && oPrev1 > oMean + 0.8 * std && !energy.isSilent {
-            let peakPos = beatPos - dt * bpm / 60
-            let err = peakPos - peakPos.rounded()
-            if abs(err) < 0.3 {
-                let strength = clamp((oPrev1 - oMean) / (3 * std), 0, 1)
-                let gain = 0.06 + 0.2 * (1 - tempoConfidence)
-                beatPos -= err * gain * strength
-            }
+        phaseTimer += dt
+        if phaseTimer >= 0.2 {
+            phaseTimer = 0
+            if !energy.isSilent && onsetHistory.count > Int(fps * 3) { alignPhase() }
         }
-        oPrev2 = oPrev1; oPrev1 = f.onset
 
         // --- kick / snare / hat hits
         for band in [0, 2, 3] {
@@ -308,6 +303,56 @@ public final class LiveAnalyzer: @unchecked Sendable {
         }
     }
 
+    /// Finds where the beat grid best fits the last ~6 s of onsets (phase + fine tempo) and steers
+    /// the beat position towards it.
+    private func alignPhase() {
+        let n = onsetHistory.count
+        let window = min(n, Int(fps * 6))
+        let start = n - window
+        var mean = 0.0
+        for i in start..<n { mean += onsetHistory[i] }
+        mean /= Double(window)
+        func x(_ idx: Double) -> Double {
+            guard idx >= Double(start), idx <= Double(n - 1) else { return 0 }
+            let i0 = Int(idx), fr = idx - Double(i0)
+            let a = onsetHistory[i0], b = i0 + 1 < n ? onsetHistory[i0 + 1] : a
+            return max(0, a + (b - a) * fr - mean)
+        }
+        let basePeriod = fps * 60 / bpm
+        var bestScore = -1.0, bestPhi = 0.0, bestDelta = 0.0, scoreSum = 0.0, scoreCount = 0.0
+        for delta in [-0.012, -0.006, 0.0, 0.006, 0.012] {
+            let period = basePeriod / (1 + delta)
+            let beats = Int(Double(window) / period) - 1
+            guard beats >= 3 else { continue }
+            var phi = 0.0
+            while phi < period {
+                var sc = 0.0, w = 1.0
+                for k in 0..<beats {
+                    sc += w * x(Double(n - 1) - phi - Double(k) * period)
+                    w *= 0.88
+                }
+                scoreSum += sc; scoreCount += 1
+                if sc > bestScore { bestScore = sc; bestPhi = phi; bestDelta = delta }
+                phi += 0.5
+            }
+        }
+        guard bestScore > 0, scoreCount > 0 else { return }
+        let contrast = bestScore / max(scoreSum / scoreCount, 1e-9)        // ~1 = no beat, ≫1 = clear beat
+        let certainty = clamp((contrast - 1.3) / 1.5, 0, 1)
+        guard certainty > 0 else { return }
+        let period = basePeriod / (1 + bestDelta)
+        // The last beat happened bestPhi frames (+ the analysis delay) ago.
+        let sinceBeat = (bestPhi + LiveAnalyzer.onsetDelay * fps) / period
+        let frac = fmodPositive(beatPos, 1)
+        var err = fmodPositive(sinceBeat, 1) - frac
+        if err > 0.5 { err -= 1 }
+        if err < -0.5 { err += 1 }
+        beatPos += err * (0.15 + 0.35 * certainty)
+        // Fine tempo: follow the comb's tempo refinement gently (manual BPM stays fixed).
+        if manualBox.get() == nil && bestDelta != 0 { bpm *= 1 + bestDelta * 0.25 * certainty }
+        tempoConfidence = max(tempoConfidence, certainty * 0.8)
+    }
+
     private func updateTempo() {
         if let m = manualBox.get() {
             bpm = m
@@ -319,7 +364,10 @@ public final class LiveAnalyzer: @unchecked Sendable {
         let cand = est.bpm
         tempoConfidence = smoothTowards(tempoConfidence, est.confidence, dt: 0.5, timeConstant: 2)
         let ratio = cand / bpm
-        if abs(ratio - 1) < 0.04 {
+        if abs(ratio - 1) < 0.015 {
+            // fine tempo is refined by the phase tracker
+            candidateCount = 0
+        } else if abs(ratio - 1) < 0.04 {
             bpm += (cand - bpm) * 0.25
             candidateCount = 0
         } else {
