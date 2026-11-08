@@ -141,12 +141,24 @@ public enum TrackAnalyzer {
         var energy = zip(loudN, bassN).map { 0.6 * $0 + 0.4 * $1 }
         energy = movingAverage(energy, radius: 2)
 
-        // Downbeat: strongest accent position mod 4.
+        // Downbeat ("the 1"): drum accents alone are ambiguous in four-on-the-floor music, so also use
+        // where the song's structure changes (energy / bass jumps) — those almost always land on a 1.
+        let raw = zip(loudN, bassN).map { 0.6 * $0 + 0.4 * $1 }
         var accSum = [Double](repeating: 0, count: 4)
-        for b in 0..<nb { accSum[b % 4] += accent[b] }
-        var downbeat = accSum.indices.max(by: { accSum[$0] < accSum[$1] }) ?? 0
+        var novSum = [Double](repeating: 0, count: 4)
+        let jumps = (0..<nb).map { abs(beatJump(raw, at: $0, span: 4)) }
+        for b in 0..<nb {
+            accSum[b % 4] += accent[b]
+            // only the exact beat where a change peaks counts (neighbours would smear it over all 4 positions)
+            let isPeak = (b == 0 || jumps[b] >= jumps[b - 1]) && (b == nb - 1 || jumps[b] > jumps[b + 1])
+            if isPeak { novSum[b % 4] += max(0, jumps[b] - 0.08) }
+        }
+        let accTotal = max(accSum.reduce(0, +), 1e-9), novTotal = max(novSum.reduce(0, +), 1e-9)
+        let combined = (0..<4).map { accSum[$0] / accTotal + 1.5 * novSum[$0] / novTotal }
+        var downbeat = combined.indices.max(by: { combined[$0] < combined[$1] }) ?? 0
 
-        let sections = detectSections(beatTimes: beatTimes, energy: energy, bass: bassN, downbeat: &downbeat)
+        var sections = detectSections(beatTimes: beatTimes, energy: energy, bass: bassN, downbeat: &downbeat)
+        refineBoundaries(&sections, beatTimes: beatTimes, raw: raw, bass: bassN, downbeat: downbeat)
 
         // Vibe over the whole track, using the beat grid for rhythm descriptors.
         var acc = VibeAccumulator(timeConstant: nil)
@@ -285,6 +297,42 @@ public enum TrackAnalyzer {
             let sb = barStarts[startBar]
             let eb = endBar < nBars ? barStarts[endBar] : nb
             return TrackSection(startBeat: sb, endBeat: eb, kind: kind, startTime: beatTimes[sb], energy: e)
+        }
+    }
+
+    /// Mean of `v` over the `span` beats from `b` minus the mean over the `span` beats before it.
+    static func beatJump(_ v: [Double], at b: Int, span: Int) -> Double {
+        guard b - span >= 0, b + span <= v.count else { return 0 }
+        var post = 0.0, pre = 0.0
+        for i in b..<(b + span) { post += v[i] }
+        for i in (b - span)..<b { pre += v[i] }
+        return (post - pre) / Double(span)
+    }
+
+    /// Moves each clear section boundary to the exact beat where the music changes (drops land on the
+    /// beat the bass comes back, not on the bar where a 4-bar average happened to change).
+    static func refineBoundaries(_ sections: inout [TrackSection], beatTimes: [Double], raw: [Double], bass: [Double], downbeat: Int) {
+        guard sections.count > 1 else { return }
+        for i in 1..<sections.count {
+            let s = sections[i].startBeat
+            let jumpHere = beatJump(raw, at: s, span: 4)
+            // Search ±6 beats, staying clear of the neighbouring boundaries.
+            let lo = max(sections[i - 1].startBeat + 4, s - 6)
+            let hi = min(sections[i].endBeat - 4, s + 6)
+            guard hi > lo else { continue }
+            var best = s, bestScore = -Double.greatestFiniteMagnitude
+            let up = jumpHere >= 0 || sections[i].kind.isHigh
+            for b in lo...hi {
+                var j = beatJump(raw, at: b, span: 4) + 0.6 * beatJump(bass, at: b, span: 2)
+                if !up { j = -j }
+                // strongly prefer downbeats, mildly prefer the original position
+                let score = j + ((b - downbeat) % 4 == 0 ? 0.12 : 0) - 0.004 * Double(abs(b - s))
+                if score > bestScore { bestScore = score; best = b }
+            }
+            guard best != s, abs(beatJump(raw, at: best, span: 4)) > 0.08 || sections[i].kind == .drop else { continue }
+            sections[i].startBeat = best
+            sections[i].startTime = beatTimes[best]
+            sections[i - 1].endBeat = best
         }
     }
 

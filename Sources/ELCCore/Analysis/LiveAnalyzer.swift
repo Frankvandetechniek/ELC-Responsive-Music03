@@ -65,6 +65,10 @@ struct SectionDetector {
     var lowBefore = false
     var changedAtBeat = 0.0
 
+    mutating func forceDrop(beat: Double) {
+        if section != .drop { section = .drop; dwell = 0; changedAtBeat = beat }
+    }
+
     mutating func update(energy: Double, bassPresence: Double, silent: Bool, dt: Double, beat: Double) -> Bool {
         eShort = smoothTowards(eShort, energy, dt: dt, timeConstant: 1.5)
         eLong = smoothTowards(eLong, energy, dt: dt, timeConstant: 14)
@@ -159,6 +163,13 @@ public final class LiveAnalyzer: @unchecked Sendable {
     private var audioTime = 0.0
     private var vibeAcc = VibeAccumulator(timeConstant: 20)
     private var groove = GrooveTracker(decayPerBar: 0.85)
+    // Fast drop detector: after a stretch without bass, the beat where kick + bass slam back in.
+    private var bassFast = 0.0
+    private var bassRef = 1e-4
+    private var lowBassTime = 0.0
+    private var dropCooldown = 0.0
+    private var dropCount = 0
+    private var dropBeat = 0.0
     private var vibeTimer = 0.0
     private var vibe = Vibe()
     private let evidenceBox = Locked<[SoundEvidence: Double]>([:])
@@ -294,6 +305,23 @@ public final class LiveAnalyzer: @unchecked Sendable {
             }
         }
 
+        // --- fast drop detection (fires on the beat, ~50-100 ms after the kick)
+        bassFast = smoothTowards(bassFast, f.bands[0], dt: dt, timeConstant: 0.06)
+        if !energy.isSilent { bassRef = max(smoothTowards(bassRef, f.bands[0], dt: dt, timeConstant: 25), 1e-6) }
+        dropCooldown = max(0, dropCooldown - dt)
+        if bassFast < 0.3 * bassRef { lowBassTime += dt } else if bassFast > 0.5 * bassRef { lowBassTime = max(0, lowBassTime - dt * 4) }
+        let barSeconds = 4 * 60 / bpm
+        let kickHit = f.flux[0] > fluxMean[0] + 3 * max(fluxVar[0].squareRoot(), 1e-6)
+        if lowBassTime > barSeconds && dropCooldown <= 0 && kickHit && bassFast > 0.6 * bassRef && !energy.isSilent {
+            // A kick can only be detected after it happened: the drop is the most recent beat.
+            let last = floor(beatPos)
+            dropBeat = beatPos - last < 0.6 ? last : beatPos
+            dropCount &+= 1
+            lowBassTime = 0
+            dropCooldown = 8 * 60 / bpm
+            sections.forceDrop(beat: dropBeat)
+        }
+
         // --- sections
         _ = sections.update(energy: energy.energy, bassPresence: energy.bassPresence,
                             silent: energy.isSilent, dt: dt, beat: beatPos)
@@ -312,6 +340,11 @@ public final class LiveAnalyzer: @unchecked Sendable {
         var mean = 0.0
         for i in start..<n { mean += onsetHistory[i] }
         mean /= Double(window)
+        // No drums (breakdown, pads): keep free-running at the last tempo instead of chasing noise.
+        // Drum hits give onset strengths of ~1-6, sustained pads ~0.03.
+        var peak = 0.0
+        for i in max(start, n - Int(fps * 3))..<n { peak = max(peak, onsetHistory[i]) }
+        guard peak > 0.3 else { return }
         func x(_ idx: Double) -> Double {
             guard idx >= Double(start), idx <= Double(n - 1) else { return 0 }
             let i0 = Int(idx), fr = idx - Double(i0)
@@ -402,6 +435,8 @@ public final class LiveAnalyzer: @unchecked Sendable {
         s.tempoConfidence = tempoConfidence
         s.isSilent = energy.isSilent
         s.vibe = vibe
+        s.dropCount = dropCount
+        s.dropBeat = dropBeat + config.latencyCompensation * bpm / 60
         let g = groove.pattern
         s.snarePattern = g.slots
         s.snareClarity = g.clarity

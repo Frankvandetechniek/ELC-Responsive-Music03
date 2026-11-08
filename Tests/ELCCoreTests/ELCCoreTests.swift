@@ -233,7 +233,8 @@ final class AnalysisTests: XCTestCase {
         let kinds = a.sections.map { $0.kind }
         XCTAssertTrue(kinds.contains(.drop), "sections: \(a.sections.map { "\($0.kind.rawValue)@\($0.startTime)" })")
         if let drop = a.sections.first(where: { $0.kind == .drop }) {
-            XCTAssertEqual(drop.startTime, beat * 64, accuracy: beat * 4.5)
+            // The drop must land on the beat the kick/bass returns (±0.25 beat), not a bar later.
+            XCTAssertEqual(drop.startTime, beat * 64, accuracy: beat * 0.25)
         }
         // Playback source reports the upcoming drop during the breakdown.
         let src = TrackMusicSource(analysis: a)

@@ -503,6 +503,22 @@ public final class ShowEngine: @unchecked Sendable {
             styleCandidate = nil
         }
 
+        // Live drop event: hit it now, on the beat it landed on (no confirmation wait).
+        if !isTrack && music.dropCount != lastDropCount {
+            let fresh = music.dropCount > lastDropCount && lastDropCount >= 0
+            lastDropCount = music.dropCount
+            if fresh && !(confirmedSection == .drop && level == 2) {
+                confirmedSection = .drop
+                pendingSection = nil
+                dropOnNextBeat = false
+                sectionChangePending = false
+                levelCandidate = nil
+                // engine clock and analyser beat agree to within a few ms; take the beat that just started
+                let landed = beat - floor(beat) < 0.5 ? floor(beat) : beat
+                executeDrop(beat: landed, palettes: palettes)
+            }
+        }
+
         // Section confirmation: exact for analysed tracks, debounced for live audio.
         if music.section != .silence && music.section != confirmedSection {
             if isTrack {
@@ -532,6 +548,7 @@ public final class ShowEngine: @unchecked Sendable {
     }
 
     private var dropOnNextBar = false
+    private var lastDropCount = -1
     private var dropOnNextBeat = false
     private var lastBeatIndex = Int.min
 

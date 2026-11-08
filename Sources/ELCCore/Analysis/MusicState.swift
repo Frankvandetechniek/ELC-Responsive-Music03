@@ -54,6 +54,10 @@ public struct MusicState: Sendable {
     /// Setlist only: average energy of the current section (0...1) and whether it is the last
     /// drop/peak of the song (the moment to give everything).
     public var sectionEnergy: Double? = nil
+    /// Live only: counts detected drops (kick + bass slamming back after a stretch without bass)
+    /// and the beat the last one landed on.
+    public var dropCount: Int = 0
+    public var dropBeat: Double = 0
     public var isFinalPeak: Bool = false
 
     public init() {}
