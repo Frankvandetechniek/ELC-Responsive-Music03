@@ -9,11 +9,13 @@ public struct TrackSection: Codable, Equatable, Sendable {
     /// Snare pattern of this section (16ths) and its clarity.
     public var snarePattern: [Double] = []
     public var snareClarity: Double = 0
+    /// The band stops for the last bar before the next (bigger) section: bass and energy drop out.
+    public var endsWithStop: Bool = false
 }
 
 /// Result of analysing a complete audio file. Cached next to the setlist.
 public struct TrackAnalysis: Codable, Equatable, Sendable {
-    public static let currentVersion = 7
+    public static let currentVersion = 8
     public var version: Int = TrackAnalysis.currentVersion
     public var duration: Double
     public var bpm: Double
@@ -165,6 +167,14 @@ public enum TrackAnalyzer {
         let activityN = activity.map { clamp($0 / 0.35, 0, 1) }
         var sections = detectSections(beatTimes: beatTimes, energy: energy, bass: bassN, activity: activityN, downbeat: &downbeat)
         refineBoundaries(&sections, beatTimes: beatTimes, raw: raw, bass: bassN, downbeat: downbeat)
+        // A "stop" bar right before a bigger section (the band drops out, then the chorus slams in).
+        for i in 0..<max(0, sections.count - 1) where sections[i + 1].energy > sections[i].energy + 0.15 {
+            let b = sections[i + 1].startBeat
+            guard b - 8 >= sections[i].startBeat else { continue }
+            let stopBass = bassN[(b - 4)..<b].reduce(0, +) / 4, stopE = raw[(b - 4)..<b].reduce(0, +) / 4
+            let prevBass = bassN[(b - 8)..<(b - 4)].reduce(0, +) / 4, prevE = raw[(b - 8)..<(b - 4)].reduce(0, +) / 4
+            if stopBass < 0.25 && prevBass - stopBass > 0.15 && stopE < prevE { sections[i].endsWithStop = true }
+        }
 
         // Vibe over the whole track, using the beat grid for rhythm descriptors.
         var acc = VibeAccumulator(timeConstant: nil)
@@ -306,7 +316,8 @@ public enum TrackAnalyzer {
         // Merge neighbours of the same kind (except drops, which must keep their start).
         var merged: [TrackSection] = []
         for s in out {
-            if var last = merged.last, last.kind == s.kind, s.kind != .drop {
+            // same label but clearly different energy (loud intro vs quiet verse) = different sections
+            if var last = merged.last, last.kind == s.kind, s.kind != .drop, abs(last.energy - s.energy) <= 0.15 {
                 last.endBeat = s.endBeat
                 merged[merged.count - 1] = last
             } else {
@@ -365,14 +376,18 @@ public enum TrackAnalyzer {
             let hi = min(sections[i].endBeat - 4, s + 6)
             guard hi > lo else { continue }
             var best = s, bestScore = -Double.greatestFiniteMagnitude
+            var bestDown = s, bestDownScore = -Double.greatestFiniteMagnitude
             let up = jumpHere >= 0 || sections[i].kind.isHigh
             for b in lo...hi {
                 var j = beatJump(raw, at: b, span: 4) + 0.6 * beatJump(bass, at: b, span: 2)
                 if !up { j = -j }
-                // strongly prefer downbeats, mildly prefer the original position
-                let score = j + ((b - downbeat) % 4 == 0 ? 0.12 : 0) - 0.004 * Double(abs(b - s))
+                let score = j - 0.004 * Double(abs(b - s))      // mildly prefer the original position
                 if score > bestScore { bestScore = score; best = b }
+                if ((b - downbeat) % 4 + 4) % 4 == 0 && score > bestDownScore { bestDownScore = score; bestDown = b }
             }
+            // Sections start on "the 1" unless the change is clearly sharper on another beat
+            // (a real anticipation / pickup). Gradual changes always snap to the downbeat.
+            if bestDownScore > -Double.greatestFiniteMagnitude && bestScore - bestDownScore < 0.15 { best = bestDown }
             guard best != s, abs(beatJump(raw, at: best, span: 4)) > 0.08 || sections[i].kind == .drop else { continue }
             sections[i].startBeat = best
             sections[i].startTime = beatTimes[best]
@@ -465,6 +480,11 @@ public struct TrackMusicSource: Sendable {
             let sec = analysis.sections[idx]
             s.section = isPlaying ? sec.kind : .silence
             s.sectionEnergy = sec.energy
+            s.sectionIndex = idx
+            if sec.endsWithStop, idx + 1 < analysis.sections.count {
+                let toNext = Double(analysis.sections[idx + 1].startBeat) - pos
+                s.inStop = toNext > 0 && toNext <= 4
+            }
             s.isFinalPeak = sec.kind.isHigh && !analysis.sections[(idx + 1)...].contains { $0.kind.isHigh }
             if sec.snareClarity > 0.35 && sec.snarePattern.count == GrooveTracker.slots {
                 s.snarePattern = sec.snarePattern; s.snareClarity = sec.snareClarity

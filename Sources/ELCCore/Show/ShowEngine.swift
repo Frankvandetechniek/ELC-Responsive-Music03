@@ -306,6 +306,8 @@ public final class ShowEngine: @unchecked Sendable {
         // --- Special moments
         var buildProgress: Double? = nil
         var gap = false
+        // The band stops for a bar before the chorus: hold the look but take it down, then hit on the 1.
+        let stop = mode == .audio && !paused && music.source == .track && music.inStop && personality.buildEffects
         if mode == .audio && !paused {
             let p = personality
             if music.source == .track {
@@ -414,6 +416,7 @@ public final class ShowEngine: @unchecked Sendable {
             guard var s = out[fx.id] else { continue }
             s.shutter = (strobeWanted && staticBlend < 0.5 && idleBlend < 0.5) ? .strobe(settings.strobeMaxRate) : .open
             if gap && staticBlend < 0.5 { s.intensity = 0 }
+            if stop && staticBlend < 0.5 { s.intensity *= 0.25 }
             if flashHeld {
                 s.intensity = 1
                 s.color = s.color.mix(.white, 0.4)
@@ -451,6 +454,7 @@ public final class ShowEngine: @unchecked Sendable {
             st.vibe = music.vibe
         }
         if gap { st.special = "Pre-drop gap" }
+        else if stop { st.special = "Stop" }
         else if impact != nil { st.special = "DROP!" }
         else if let bp = buildProgress { st.special = "Build-up \(Int(bp * 100))%" }
         else if entryHit != nil { st.special = "Hit!" }
@@ -480,6 +484,7 @@ public final class ShowEngine: @unchecked Sendable {
                 styleChangePending = true
                 sectionChangePending = true
                 lookMemory = [:]            // new song: new looks
+                lastSectionIndex = nil
             }
             lastTrackProgress = prog
         }
@@ -529,6 +534,16 @@ public final class ShowEngine: @unchecked Sendable {
         // Section confirmation: exact for analysed tracks, debounced for live audio.
         // A "drop" in a pop / rock / ballad song is its big chorus: it gets the chorus treatment.
         let incoming = musicalSection(music.section)
+        // Setlist: a new analysed section is a boundary even when it has the same label
+        // (loud intro → quieter verse, verse → a bigger second half).
+        if isTrack, let idx = music.sectionIndex, idx != lastSectionIndex {
+            let first = lastSectionIndex == nil
+            lastSectionIndex = idx
+            if !first && incoming == confirmedSection && incoming != .silence {
+                pendingSince = music.sectionStartBeat
+                applySectionChange(bar: currentBar, beat: beat, palettes: palettes)
+            }
+        }
         if incoming != .silence && incoming != confirmedSection {
             if isTrack {
                 confirmedSection = incoming
@@ -557,6 +572,7 @@ public final class ShowEngine: @unchecked Sendable {
 
     private var dropOnNextBar = false
     private var lastDropCount = -1
+    private var lastSectionIndex: Int? = nil
     private var dropOnNextBeat = false
     private var lastBeatIndex = Int.min
 
@@ -564,9 +580,15 @@ public final class ShowEngine: @unchecked Sendable {
         var l = level
         let up: [Double] = [0.42, 0.72]
         let down: [Double] = [0.32, 0.62]
-        let e = sectionEnergy.map { clamp($0 + settings.energyBias, 0, 1) } ?? slowEnergy
-        while l < 2 && e > up[l] { l += 1 }
-        while l > 0 && e < down[l - 1] { l -= 1 }
+        if let se = sectionEnergy {
+            // Setlist: one stable level per analysed section (relative to the rest of the song).
+            let e = clamp(se + settings.energyBias, 0, 1)
+            l = e < 0.40 ? 0 : (e < 0.62 ? 1 : 2)
+        } else {
+            let e = slowEnergy
+            while l < 2 && e > up[l] { l += 1 }
+            while l > 0 && e < down[l - 1] { l -= 1 }
+        }
         switch confirmedSection {
         case .ambient, .breakdown: l = 0
         case .build: l = max(l, 1)
@@ -685,7 +707,11 @@ public final class ShowEngine: @unchecked Sendable {
         let key = SectionKey(section: confirmedSection, level: level)
         phraseOriginBar = bar
         lastChangeBar = bar
-        if key == currentKey && prevLook == nil && !lookMemory.isEmpty { return }
+        if key == currentKey && prevLook == nil && !lookMemory.isEmpty {
+            // Same kind of section continues (chorus → final chorus): keep the look, but let it grow.
+            look.lift = isFinalPeak && level == 2
+            return
+        }
         let next: Look
         if var remembered = lookMemory[key], palettes.contains(remembered.palette) {
             remembered.lift = isFinalPeak && level == 2

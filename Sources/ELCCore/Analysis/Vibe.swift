@@ -317,9 +317,13 @@ public enum VibeModel {
             v.usesNeuralModel = true
             let g = { (k: String) in f.tags[k] ?? 0 }
             var ml: [MusicStyle: Double] = [:]
-            ml[.pop] = g("pop") + 0.6 * g("indie pop") + 0.4 * g("catchy") + 0.25 * g("female vocalists") + 0.2 * g("00s")
-            ml[.rock] = g("rock") + g("alternative rock") + g("classic rock") + g("indie rock") + g("hard rock")
-                + g("metal") + g("heavy metal") + g("punk") + g("Progressive rock") + 0.4 * g("guitar") + 0.3 * g("alternative")
+            // Vocal-led songs lean pop; rock sub-tags are correlated, so they don't simply add up.
+            let vocals = max(g("female vocalists"), g("female vocalist"), g("male vocalists"))
+            ml[.pop] = g("pop") + 0.6 * g("indie pop") + 0.4 * g("catchy") + 0.6 * vocals + 0.2 * g("00s")
+            let rockFamily = [g("rock"), g("alternative rock"), g("classic rock"), g("indie rock"), g("hard rock"),
+                              g("metal"), g("heavy metal"), g("punk"), g("Progressive rock")]
+            ml[.rock] = (rockFamily.max() ?? 0) + 0.25 * (rockFamily.reduce(0, +) - (rockFamily.max() ?? 0))
+                + 0.4 * g("guitar") + 0.15 * g("alternative")
             ml[.hipHop] = 1.2 * g("Hip-Hop") + g("rnb") + 0.4 * g("soul") + 0.3 * g("funk") + 0.3 * g("sexy")
             ml[.house] = 1.3 * g("House") + 0.4 * g("electronic") + 0.3 * g("electro") + 0.3 * g("dance")
             ml[.edm] = g("dance") + 0.8 * g("electro") + 0.4 * g("electronic") + 0.5 * g("party") + 0.2 * g("electronica")

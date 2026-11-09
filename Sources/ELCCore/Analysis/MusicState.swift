@@ -59,6 +59,10 @@ public struct MusicState: Sendable {
     public var dropCount: Int = 0
     public var dropBeat: Double = 0
     public var isFinalPeak: Bool = false
+    /// Setlist only: inside the "stop" bar before a bigger section (band drops out).
+    public var inStop: Bool = false
+    /// Setlist only: index of the current analysed section (a new section can have the same label).
+    public var sectionIndex: Int? = nil
 
     public init() {}
 

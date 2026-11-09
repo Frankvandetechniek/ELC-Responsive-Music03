@@ -8,6 +8,8 @@ import Foundation
 struct SyntheticPopSong {
     let bpm: Double
     let sr: Double
+    /// The band drops out (no drums, no bass) for the last bar of each verse before the chorus.
+    var stopBeforeChorus = false
     let sections: [(name: String, bars: Int)] = [("intro", 4), ("verse", 16), ("chorus", 16), ("verse", 16), ("chorus", 16), ("outro", 4)]
 
     var boundaryBars: [Int] {
@@ -37,7 +39,9 @@ struct SyntheticPopSong {
             let kind = barKind[bar]
             let barInSection = bar - (boundaryBars.last { $0 <= bar } ?? 0)
             let chorus = kind == "chorus"
-            let drums = kind != "intro" && kind != "outro"
+            let sectionLen = sections.first { $0.name == kind }?.bars ?? 0
+            let stopBar = stopBeforeChorus && kind == "verse" && barInSection == sectionLen - 1
+            let drums = kind != "intro" && kind != "outro" && !stopBar
             var v = 0.0
             if drums {
                 if bIdx == 0 || bIdx == 2 || (chorus && bIdx == 1 && ph > beat * 0.5) {
@@ -55,7 +59,7 @@ struct SyntheticPopSong {
             let swell = kind == "verse" ? 0.75 + 0.25 * sin(2 * .pi * Double(barInSection) / 4) : 1
             let ch = chord[bar % 4]
             for f in ch { v += (chorus ? 0.07 : 0.05) * swell * sin(2 * .pi * f * t) }
-            v += (chorus ? 0.22 : 0.15) * sin(2 * .pi * ch[0] / 4 * t)
+            if !stopBar { v += (chorus ? 0.22 : 0.15) * sin(2 * .pi * ch[0] / 4 * t) }
             out[i] = Float(v)
         }
         return out

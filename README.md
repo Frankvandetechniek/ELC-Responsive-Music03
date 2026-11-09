@@ -80,6 +80,9 @@ The goal is a show that looks programmed by a lighting designer, not an audio vi
 Looks follow the song's real structure: intro, verse, chorus, bridge, build-up, drop, outro.
 - **Boundaries** sit where the energy, bass or drum activity really changes, refined to the exact beat. Normal variation inside a verse doesn't create a new section, such as a drum fill or a vocal swell.
 - **Build-ups** are only detected where the music actually rises into a clearly bigger section, never just because a verse comes before a chorus.
+- **Section changes** happen even when two neighbouring sections have the same label but clearly different energy (a loud intro followed by a quieter verse). Boundaries land on "the 1" unless the music clearly changes on another beat.
+- **Stop bars:** if the band drops out for the bar before a chorus, the rig dims through that bar and hits on the chorus downbeat.
+- **Repeated sections:** when the final chorus follows a chorus, it keeps the chorus look but grows bigger.
 - **Ambient** means quiet *and* no beat. A quiet verse with drums is a verse, so every verse gets the same look.
 - **Tempo:** if busy hi-hats make a slow song read at double tempo, a backbeat check corrects it. You can also right-click a track and choose **Tempo fix** (Half / Double / Automatic) to re-analyse it at the right tempo.
 
