@@ -200,6 +200,11 @@ struct SetlistPanel: View {
                                         }
                                         model.analyze(trackID: t.id)
                                     }
+                                    Menu("Tempo fix") {
+                                        Button("Automatic") { model.setTempoScale(trackID: t.id, nil) }
+                                        Button("Half tempo (song is slower)") { model.setTempoScale(trackID: t.id, 0.5) }
+                                        Button("Double tempo (song is faster)") { model.setTempoScale(trackID: t.id, 2) }
+                                    }
                                     Button("Remove") {
                                         if let i = model.setlist.firstIndex(where: { $0.id == t.id }) {
                                             model.removeTracks(at: IndexSet(integer: i))

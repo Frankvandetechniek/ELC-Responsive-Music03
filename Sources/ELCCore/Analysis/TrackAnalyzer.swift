@@ -13,7 +13,7 @@ public struct TrackSection: Codable, Equatable, Sendable {
 
 /// Result of analysing a complete audio file. Cached next to the setlist.
 public struct TrackAnalysis: Codable, Equatable, Sendable {
-    public static let currentVersion = 6
+    public static let currentVersion = 7
     public var version: Int = TrackAnalysis.currentVersion
     public var duration: Double
     public var bpm: Double
@@ -49,7 +49,8 @@ public enum TrackAnalyzer {
     public static let onsetDelay = 0.015
 
     /// Analyses a full mono signal. Runs in roughly 1-3 s for a typical 4 minute track.
-    public static func analyze(samples: [Float], sampleRate: Double,
+    /// - Parameter tempoScale: operator correction (0.5 = the song is half the detected tempo, 2 = double).
+    public static func analyze(samples: [Float], sampleRate: Double, tempoScale: Double = 1,
                                progress: ((Double) -> Void)? = nil) -> TrackAnalysis {
         let duration = Double(samples.count) / sampleRate
         let extractor = FeatureExtractor(sampleRate: sampleRate)
@@ -101,6 +102,8 @@ public enum TrackAnalyzer {
         } else if let e = TempoEstimator.estimate(onsets: onsets, fps: fps) {
             bpm = e.bpm
         }
+        bpm = backbeatOctaveCheck(bpm: bpm, frames: frames, fps: fps)
+        if tempoScale != 1 { bpm = clamp(bpm * tempoScale, 50, 210) }
         progress?(0.8)
 
         let beatFrames = TempoEstimator.trackBeats(onsets: onsets, fps: fps, bpm: bpm)
@@ -120,20 +123,21 @@ public enum TrackAnalyzer {
         var loud = [Double](repeating: -80, count: nb)
         var bass = [Double](repeating: 0, count: nb)
         var accent = [Double](repeating: 0, count: nb)
+        var activity = [Double](repeating: 0, count: nb)
         var fi = 0
         for b in 0..<nb {
             let start = beatTimes[b]
             let end = b + 1 < nb ? beatTimes[b + 1] : start + 60 / bpm
-            var sumDb = 0.0, sumBass = 0.0, cnt = 0.0, acc = 0.0
+            var sumDb = 0.0, sumBass = 0.0, cnt = 0.0, acc = 0.0, sumOnset = 0.0
             while fi < frames.count && frames[fi].time - hopOffset < start - 0.05 { fi += 1 }
             var j = fi
             while j < frames.count && frames[j].time - hopOffset < end - 0.05 {
                 let f = frames[j]
-                sumDb += f.rmsDb; sumBass += f.bands[0]; cnt += 1
+                sumDb += f.rmsDb; sumBass += f.bands[0]; sumOnset += min(f.onset, 6); cnt += 1
                 if f.time - hopOffset < start + 0.07 { acc = max(acc, f.flux[0] + 0.8 * f.flux[3]) }
                 j += 1
             }
-            if cnt > 0 { loud[b] = sumDb / cnt; bass[b] = sumBass / cnt }
+            if cnt > 0 { loud[b] = sumDb / cnt; bass[b] = sumBass / cnt; activity[b] = sumOnset / cnt }
             accent[b] = acc
         }
         let loudN = percentileNormalize(loud, lo: 0.08, hi: 0.95)
@@ -157,7 +161,9 @@ public enum TrackAnalyzer {
         let combined = (0..<4).map { accSum[$0] / accTotal + 1.5 * novSum[$0] / novTotal }
         var downbeat = combined.indices.max(by: { combined[$0] < combined[$1] }) ?? 0
 
-        var sections = detectSections(beatTimes: beatTimes, energy: energy, bass: bassN, downbeat: &downbeat)
+        // Drum activity per beat: absolute (drum-driven mixes ≈ 0.3-1, pads/vocals only ≈ 0.02)
+        let activityN = activity.map { clamp($0 / 0.35, 0, 1) }
+        var sections = detectSections(beatTimes: beatTimes, energy: energy, bass: bassN, activity: activityN, downbeat: &downbeat)
         refineBoundaries(&sections, beatTimes: beatTimes, raw: raw, bass: bassN, downbeat: downbeat)
 
         // Vibe over the whole track, using the beat grid for rhythm descriptors.
@@ -200,7 +206,8 @@ public enum TrackAnalyzer {
         return result
     }
 
-    static func detectSections(beatTimes: [Double], energy: [Double], bass: [Double], downbeat: inout Int) -> [TrackSection] {
+    static func detectSections(beatTimes: [Double], energy: [Double], bass: [Double], activity: [Double]? = nil,
+                               downbeat: inout Int) -> [TrackSection] {
         let nb = beatTimes.count
         guard nb >= 16 else {
             return [TrackSection(startBeat: 0, endBeat: nb, kind: .groove, startTime: beatTimes.first ?? 0, energy: 0.5)]
@@ -217,6 +224,7 @@ public enum TrackAnalyzer {
         }
         let barE = (0..<nBars).map { barMean(energy, $0) }
         let barB = (0..<nBars).map { barMean(bass, $0) }
+        let barA = (0..<nBars).map { barMean(activity ?? energy.map { _ in 1 }, $0) }
         // Novelty between the 4 bars before and after each bar line.
         var novelty = [Double](repeating: 0, count: nBars)
         for i in 2..<max(2, nBars - 1) {
@@ -239,7 +247,7 @@ public enum TrackAnalyzer {
         }
         boundaries.append(nBars)
 
-        struct Seg { var startBar: Int; var endBar: Int; var e: Double; var b: Double; var slope: Double }
+        struct Seg { var startBar: Int; var endBar: Int; var e: Double; var b: Double; var a: Double; var slope: Double }
         var segs: [Seg] = []
         for k in 0..<(boundaries.count - 1) {
             let s = boundaries[k], e = boundaries[k + 1]
@@ -247,15 +255,18 @@ public enum TrackAnalyzer {
             let me = barE[s..<e].reduce(0, +) / Double(e - s)
             let mb = barB[s..<e].reduce(0, +) / Double(e - s)
             let slope = e - s >= 2 ? (barE[e - 1] - barE[s]) : 0
-            segs.append(Seg(startBar: s, endBar: e, e: me, b: mb, slope: slope))
+            let ma = barA[s..<e].reduce(0, +) / Double(e - s)
+            segs.append(Seg(startBar: s, endBar: e, e: me, b: mb, a: ma, slope: slope))
         }
         var out: [TrackSection] = []
         for (k, sg) in segs.enumerated() {
             let prev = k > 0 ? segs[k - 1] : nil
             let next = k + 1 < segs.count ? segs[k + 1] : nil
             var kind: MusicSection
-            if sg.e < 0.22 {
-                kind = .ambient
+            if sg.e < 0.22 && sg.a < 0.3 {
+                kind = .ambient                 // quiet AND no real beat
+            } else if sg.e < 0.22 {
+                kind = .groove                  // a quiet verse with drums is still a verse
             } else if let p = prev, sg.e > 0.6, sg.b > 0.5, sg.e - p.e > 0.18 || (p.b < 0.35 && sg.b > 0.6) {
                 kind = .drop
             } else if sg.b < 0.35 && sg.e < 0.65 {
@@ -265,16 +276,30 @@ public enum TrackAnalyzer {
             } else {
                 kind = .groove
             }
-            // A segment just before a drop with rising energy is a build-up; split long ones.
+            // Build-up only where the music actually rises (energy or drum activity) into a clearly bigger
+            // section — never just because a verse happens to come before a chorus.
             if let n = next, n.e - sg.e > 0.18, n.b > 0.5, kind != .drop, kind != .peak {
                 let len = sg.endBar - sg.startBar
-                if len > 8 && sg.slope <= 0.1 {
-                    let splitBar = sg.endBar - 4
-                    out.append(makeSection(startBar: sg.startBar, endBar: splitBar, kind: kind, e: sg.e))
-                    out.append(makeSection(startBar: splitBar, endBar: sg.endBar, kind: .build, e: sg.e))
-                    continue
+                func rise(_ arr: [Double], over k: Int) -> Double {
+                    let a0 = max(sg.startBar, sg.endBar - k)
+                    guard sg.endBar - a0 >= 2 else { return 0 }
+                    let head = arr[a0..<min(a0 + 2, sg.endBar)].reduce(0, +) / Double(min(2, sg.endBar - a0))
+                    let tail = arr[(sg.endBar - 2)..<sg.endBar].reduce(0, +) / 2
+                    return tail - head
                 }
-                kind = .build
+                var buildBars = 0
+                for k in [4, 8] where k <= len {
+                    if rise(barE, over: k) > 0.12 || rise(barA, over: k) > 0.15 { buildBars = k }
+                }
+                if buildBars > 0 {
+                    if len >= buildBars + 4 {
+                        let splitBar = sg.endBar - buildBars
+                        out.append(makeSection(startBar: sg.startBar, endBar: splitBar, kind: kind, e: sg.e))
+                        out.append(makeSection(startBar: splitBar, endBar: sg.endBar, kind: .build, e: sg.e))
+                        continue
+                    }
+                    kind = .build
+                }
             }
             out.append(makeSection(startBar: sg.startBar, endBar: sg.endBar, kind: kind, e: sg.e))
         }
@@ -298,6 +323,25 @@ public enum TrackAnalyzer {
             let eb = endBar < nBars ? barStarts[endBar] : nb
             return TrackSection(startBeat: sb, endBeat: eb, kind: kind, startTime: beatTimes[sb], energy: e)
         }
+    }
+
+    /// Pop/rock snares sit on beats 2 and 4, so they repeat every 2 beats. If they repeat every 4
+    /// detected beats instead, the tempo was read double (busy hi-hats on a slow song): halve it.
+    static func backbeatOctaveCheck(bpm: Double, frames: [FrameFeatures], fps: Double) -> Double {
+        guard bpm > 130, bpm / 2 >= 60, frames.count > Int(fps * 20) else { return bpm }
+        let snare = frames.map { GrooveTracker.snareStrength($0) }
+        let mean = snare.reduce(0, +) / Double(snare.count)
+        let x = snare.map { max(0, $0 - mean) }
+        func ac(_ beats: Double) -> Double {
+            let lag = Int((beats * 60 * fps / bpm).rounded())
+            guard lag > 0, lag < x.count / 2 else { return 0 }
+            var sum = 0.0
+            for i in lag..<x.count { sum += x[i] * x[i - lag] }
+            return sum / Double(x.count - lag)
+        }
+        let a2 = ac(2), a4 = ac(4), a1 = ac(1)
+        if a4 > 1.4 * a2 && a4 > 1.4 * a1 { return bpm / 2 }
+        return bpm
     }
 
     /// Mean of `v` over the `span` beats from `b` minus the mean over the `span` beats before it.

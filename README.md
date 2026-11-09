@@ -75,6 +75,14 @@ The goal is a show that looks programmed by a lighting designer, not an audio vi
    - When the music stops, the rig fades to an ambient brand-colour glow.
 9. **Strobe** is only used on drops and the last beat before a known drop, plus short peak hits for EDM. It is never used for ballads or ambient music, can be switched off, and never runs longer than 4 seconds.
 
+## Song structure (setlist)
+
+Looks follow the song's real structure: intro, verse, chorus, bridge, build-up, drop, outro.
+- **Boundaries** sit where the energy, bass or drum activity really changes, refined to the exact beat. Normal variation inside a verse doesn't create a new section, such as a drum fill or a vocal swell.
+- **Build-ups** are only detected where the music actually rises into a clearly bigger section, never just because a verse comes before a chorus.
+- **Ambient** means quiet *and* no beat. A quiet verse with drums is a verse, so every verse gets the same look.
+- **Tempo:** if busy hi-hats make a slow song read at double tempo, a backbeat check corrects it. You can also right-click a track and choose **Tempo fix** (Half / Double / Automatic) to re-analyse it at the right tempo.
+
 ## Timing
 
 Every timing-critical path is covered by regression tests that run on synthetic music:

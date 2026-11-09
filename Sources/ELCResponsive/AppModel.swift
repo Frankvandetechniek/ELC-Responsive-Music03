@@ -165,7 +165,7 @@ final class AppModel: ObservableObject {
             Task { @MainActor in self?.refreshUI() }
         }
         // Load cached analyses for the saved setlist.
-        for i in setlist.indices { setlist[i].analysis = AnalysisCache.load(for: setlist[i].url) }
+        for i in setlist.indices { setlist[i].analysis = AnalysisCache.load(for: setlist[i].url, tempoScale: setlist[i].tempoScale) }
         for t in setlist where t.analysis == nil { analyze(trackID: t.id) }
     }
 
@@ -287,10 +287,11 @@ final class AppModel: ObservableObject {
         guard let track = setlist.first(where: { $0.id == trackID }), analyzing[trackID] == nil else { return }
         analyzing[trackID] = 0
         let url = track.url
+        let scale = track.tempoScale
         Task.detached(priority: .userInitiated) { [self] in
             do {
                 let (samples, sr) = try AudioDecoding.monoSamples(url: url)
-                let base = TrackAnalyzer.analyze(samples: samples, sampleRate: sr) { p in
+                let base = TrackAnalyzer.analyze(samples: samples, sampleRate: sr, tempoScale: scale ?? 1) { p in
                     Task { @MainActor in self.analyzing[trackID] = p * 0.85 }
                 }
                 // Instrument / vocal recognition with Apple's on-device sound classifier.
@@ -299,7 +300,7 @@ final class AppModel: ObservableObject {
                 // Genre / mood tags from the MusiCNN neural network.
                 let tags = GenreModel.tags(url: url)
                 let result = (evidence.isEmpty && tags.isEmpty) ? base : base.withEvidence(evidence, tags: tags)
-                AnalysisCache.save(result, for: url)
+                AnalysisCache.save(result, for: url, tempoScale: scale)
                 await MainActor.run {
                     self.analyzing[trackID] = nil
                     if let i = self.setlist.firstIndex(where: { $0.id == trackID }) {
@@ -315,6 +316,15 @@ final class AppModel: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Operator tempo fix for one track (nil = automatic), then re-analyse it.
+    func setTempoScale(trackID: UUID, _ scale: Double?) {
+        guard let i = setlist.firstIndex(where: { $0.id == trackID }) else { return }
+        setlist[i].tempoScale = scale
+        setlist[i].analysis = AnalysisCache.load(for: setlist[i].url, tempoScale: scale)
+        if setlist[i].analysis == nil { analyze(trackID: trackID) }
+        else if currentTrackID == trackID { player.updateAnalysis(setlist[i].analysis) }
     }
 
     func play(trackID: UUID, from time: Double = 0) {

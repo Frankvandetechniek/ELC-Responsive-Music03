@@ -8,10 +8,12 @@ struct SetlistTrack: Identifiable, Codable, Equatable {
     var title: String
     var duration: Double = 0
     var analysis: TrackAnalysis? = nil
+    /// Operator tempo correction for this track: 0.5 (half), 2 (double) or nil (automatic).
+    var tempoScale: Double? = nil
 
     var url: URL { URL(fileURLWithPath: path) }
 
-    enum CodingKeys: String, CodingKey { case id, path, title, duration }
+    enum CodingKeys: String, CodingKey { case id, path, title, duration, tempoScale }
 }
 
 enum AudioDecoding {
@@ -60,25 +62,26 @@ enum AnalysisCache {
         return dir
     }
 
-    static func key(for url: URL) -> String {
+    static func key(for url: URL, tempoScale: Double? = nil) -> String {
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
         let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
         var h: UInt64 = 1469598103934665603
-        for b in "\(url.path)|\(size)|\(Int(mtime))".utf8 { h = (h ^ UInt64(b)) &* 1099511628211 }
+        let scale = tempoScale.map { "|x\($0)" } ?? ""
+        for b in "\(url.path)|\(size)|\(Int(mtime))\(scale)".utf8 { h = (h ^ UInt64(b)) &* 1099511628211 }
         return String(h, radix: 16)
     }
 
-    static func load(for url: URL) -> TrackAnalysis? {
-        let f = directory.appendingPathComponent(key(for: url) + ".json")
+    static func load(for url: URL, tempoScale: Double? = nil) -> TrackAnalysis? {
+        let f = directory.appendingPathComponent(key(for: url, tempoScale: tempoScale) + ".json")
         guard let data = try? Data(contentsOf: f),
               let a = try? JSONDecoder().decode(TrackAnalysis.self, from: data),
               a.version == TrackAnalysis.currentVersion else { return nil }
         return a
     }
 
-    static func save(_ a: TrackAnalysis, for url: URL) {
-        let f = directory.appendingPathComponent(key(for: url) + ".json")
+    static func save(_ a: TrackAnalysis, for url: URL, tempoScale: Double? = nil) {
+        let f = directory.appendingPathComponent(key(for: url, tempoScale: tempoScale) + ".json")
         if let data = try? JSONEncoder().encode(a) { try? data.write(to: f) }
     }
 }
